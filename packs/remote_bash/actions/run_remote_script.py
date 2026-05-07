@@ -27,6 +27,23 @@ ALLOWED_SCRIPTS: List[str] = []
 
 HOSTFILE_SUFFIXES: FrozenSet[str] = frozenset({".yaml", ".yml", ".json"})
 
+_SSH_AUTO_ADD_PARAM_UNSET = object()
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    s = str(value).strip().lower()
+    if s in ("true", "1", "yes", "on", "y"):
+        return True
+    if s in ("false", "0", "no", "off", "n", ""):
+        return False
+    return default
+
 
 def _validate_script_path(script_path: str, extra_allowlist: Optional[List[str]]) -> None:
     if not script_path or not str(script_path).strip():
@@ -80,6 +97,7 @@ class RunRemoteScriptAction(Action):
         host_entry: Optional[str] = None,
         timeout: Optional[int] = None,
         ssh_port: Optional[int] = None,
+        ssh_auto_add_host_key: Any = _SSH_AUTO_ADD_PARAM_UNSET,
     ) -> Tuple[bool, Dict[str, Any]]:
         cfg = self.config or {}
         github_token = (cfg.get("github_token") or "").strip() or None
@@ -168,14 +186,21 @@ class RunRemoteScriptAction(Action):
             quoted_remote = shlex.quote(remote_path)
 
             known_hosts = (cfg.get("ssh_known_hosts_path") or "").strip() or None
-            strict_hk = cfg.get("ssh_strict_host_key_checking", True)
-            if isinstance(strict_hk, str):
-                strict_hk = strict_hk.strip().lower() not in ("false", "0", "no", "off")
+            strict_hk = _coerce_bool(cfg.get("ssh_strict_host_key_checking"), True)
 
-            auto_add_hk = cfg.get("ssh_auto_add_host_key", False)
-            if isinstance(auto_add_hk, str):
-                auto_add_hk = auto_add_hk.strip().lower() in ("true", "1", "yes", "on")
-            auto_add_hk = bool(auto_add_hk)
+            auto_add_hk = _coerce_bool(cfg.get("ssh_auto_add_host_key"), False)
+            if ssh_auto_add_host_key is not _SSH_AUTO_ADD_PARAM_UNSET and ssh_auto_add_host_key is not None:
+                auto_add_hk = _coerce_bool(ssh_auto_add_host_key, False)
+
+            LOG.info(
+                "SSH host key settings resolved",
+                extra={
+                    "auto_add_host_key": auto_add_hk,
+                    "strict_host_key_checking": strict_hk,
+                    "override_from_action": ssh_auto_add_host_key is not _SSH_AUTO_ADD_PARAM_UNSET
+                    and ssh_auto_add_host_key is not None,
+                },
+            )
 
             save_path_auto: Optional[str] = None
             if auto_add_hk:
@@ -193,7 +218,7 @@ class RunRemoteScriptAction(Action):
                 private_key_pem=private_key,
                 command_timeout=exec_timeout,
                 known_hosts_path=known_hosts,
-                strict_host_key_checking=bool(strict_hk),
+                strict_host_key_checking=strict_hk,
                 auto_add_host_key=auto_add_hk,
                 known_hosts_save_path=save_path_auto,
             )

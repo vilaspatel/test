@@ -65,6 +65,7 @@ Example `config.yaml` (paths vary by install):
 
 ```yaml
 ---
+# Delinea — omit entirely when using only inline SSH creds (workflow passthrough / action params)
 delinea_url: "https://your-tenant.secretservercloud.com"
 delinea_client_id: "your-oauth-client-id"
 delinea_client_secret: "your-oauth-client-secret"
@@ -77,6 +78,16 @@ ssh_known_hosts_path: "/home/stanley/.ssh/stackstorm_known_hosts"
 ssh_strict_host_key_checking: true   # false = lab only (see SSH host keys)
 ssh_auto_add_host_key: false         # true = accept & save new keys on first connect
 ```
+
+Pack config validation allows **no Delinea keys** in `universal.yaml`. Runtime checks still apply: `get_delinea_secret` and `run_remote_script` with `delinea_secret_id` require those settings to be present and complete.
+
+### `ssh_auto_add_host_key` not taking effect
+
+After editing `/opt/stackstorm/configs/universal.yaml`, run **`sudo st2ctl reload --register-configs`** (or `--register-all`). Then confirm live config: **`st2 pack config universal`**.
+
+Each action execution logs **`SSH host key settings resolved`** with **`auto_add_host_key`** — it must be **`true`** before SSH connects. If it is **`false`**, the runner may still be serving old config, or StackStorm passed a **null** action parameter that cleared the flag — omit optional **`ssh_auto_add_host_key`** on `st2 run`, or pass **`ssh_auto_add_host_key=true`** once to force auto-add regardless of cache.
+
+YAML boolean must be literal **`true`** / **`false`** (not quoted strings like `"true"` unless they parse as booleans for your StackStorm version).
 
 ### Delinea Secret Server setup
 

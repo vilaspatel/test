@@ -1,19 +1,20 @@
 ---
 delinea_url:
   description: >
-    Base URL for Delinea Secret Server (e.g. https://tenant.secretservercloud.com
-    or https://secretserver.example.com).
+    Base URL for Delinea Secret Server (e.g. https://tenant.secretservercloud.com).
+    Optional if you only use inline SSH credentials (ssh_username / ssh_password / key)
+    and never call get_delinea_secret or delinea_secret_id on run_remote_script.
   type: string
-  required: true
+  required: false
 delinea_client_id:
-  description: OAuth2 client ID for Delinea Secret Server API (client credentials).
+  description: OAuth2 client ID for Delinea API (client credentials). Required when using Delinea.
   type: string
-  required: true
+  required: false
 delinea_client_secret:
-  description: OAuth2 client secret for Delinea Secret Server API.
+  description: OAuth2 client secret for Delinea API. Required when using Delinea.
   type: string
   secret: true
-  required: true
+  required: false
 github_token:
   description: >
     Optional GitHub personal access token for cloning private repositories.
