@@ -74,6 +74,8 @@ ssh_port: 22
 git_clone_timeout: 600
 delinea_request_timeout: 60
 ssh_known_hosts_path: "/home/stanley/.ssh/stackstorm_known_hosts"
+ssh_strict_host_key_checking: true   # false = lab only (see SSH host keys)
+ssh_auto_add_host_key: false         # true = accept & save new keys on first connect
 ```
 
 ### Delinea Secret Server setup
@@ -109,16 +111,25 @@ Credentials remain in **Delinea** only—the hostfile must **not** contain passw
 
 ### SSH host keys
 
+If you see **`Server 'x.x.x.x' not found in known_hosts`**, Paramiko is using strict verification: the target’s SSH host key is not in any loaded `known_hosts` file for the StackStorm service account.
+
+**Production fix (recommended):** add the host key on the **same machine that runs StackStorm actions** (the user that executes `st2`, often `stanley` or `root`):
+
+```bash
+ssh-keyscan -H 40.67.169.124 >> ~/.ssh/known_hosts
+# or append to the file referenced by pack config ssh_known_hosts_path
+```
+
+Use your real IP/hostname and the correct user home directory.
+
+**Lab / quick test only:** set pack config **`ssh_strict_host_key_checking: false`**. This uses Paramiko’s `WarningPolicy` so unknown hosts are allowed (with a warning log). **Do not use in production** — it weakens protection against machine-in-the-middle attacks.
+
+**Automatic trust-on-first-use (optional):** set **`ssh_auto_add_host_key: true`**. On first connect to an unknown host, Paramiko accepts the server key (`AutoAddPolicy`), then **`save_host_keys`** writes it to disk—by default **`~/.ssh/known_hosts`**, or to **`ssh_known_hosts_path`** when that pack setting is set (same path used for loading extra keys). The next run loads that key and behaves like strict verification for that host. **Security note:** the very first connection still trusts whatever key the server presents on that attempt (MITM risk on that hop); prefer **`ssh-keyscan`** ahead of time for production.
+
 `SSHClient` loads:
 
 1. The StackStorm service user’s system `known_hosts` (typically `/home/stanley/.ssh/known_hosts` or `/root/.ssh/known_hosts` depending on deployment).
 2. Optionally `ssh_known_hosts_path` from pack config.
-
-Host keys **must** include targets before first connection (MITM-safe default). Pre-seed keys, for example:
-
-```bash
-ssh-keyscan -H 10.0.0.5 >> /home/stanley/.ssh/known_hosts
-```
 
 ## Security model
 
@@ -265,7 +276,7 @@ For host inventories, copy `examples/hosts.example.yaml` into your repo (for exa
 
 | Symptom | Likely cause | Mitigation |
 |---------|----------------|------------|
-| SSH “not found in known_hosts” / Paramiko rejection | Missing host key | Run `ssh-keyscan` into the runner user `known_hosts` or `ssh_known_hosts_path`. |
+| `not found in known_hosts` / Paramiko rejection | Target key not in `known_hosts` for the ST2 runner user | Run `ssh-keyscan -H <host> >> ~/.ssh/known_hosts` on the runner, or set `ssh_strict_host_key_checking: false` **only for testing**. |
 | `git clone` failure | Auth, DNS, or branch name | Verify PAT for private repos; confirm branch exists; check runner outbound HTTPS. |
 | Delinea HTTP 401/403 | Wrong OAuth scopes or secret ID | Validate client credentials grant and RBAC on the secret. |
 | `script is not in the allowlist` | `allowed_scripts` configured | Add basename or relative path, or clear allowlist for path-only checks. |

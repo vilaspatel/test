@@ -8,6 +8,7 @@ are rejected. Optional allowlist is enforced when configured.
 from __future__ import annotations
 
 import logging
+import os
 import shlex
 import shutil
 import time
@@ -187,6 +188,22 @@ class RunRemoteScriptAction(Action):
             quoted_remote = shlex.quote(remote_path)
 
             known_hosts = (cfg.get("ssh_known_hosts_path") or "").strip() or None
+            strict_hk = cfg.get("ssh_strict_host_key_checking", True)
+            if isinstance(strict_hk, str):
+                strict_hk = strict_hk.strip().lower() not in ("false", "0", "no", "off")
+
+            auto_add_hk = cfg.get("ssh_auto_add_host_key", False)
+            if isinstance(auto_add_hk, str):
+                auto_add_hk = auto_add_hk.strip().lower() in ("true", "1", "yes", "on")
+            auto_add_hk = bool(auto_add_hk)
+
+            save_path_auto: Optional[str] = None
+            if auto_add_hk:
+                save_path_auto = (
+                    os.path.expanduser(known_hosts)
+                    if known_hosts
+                    else os.path.expanduser("~/.ssh/known_hosts")
+                )
 
             ssh = SSHClient(
                 hostname=resolved_host,
@@ -196,6 +213,9 @@ class RunRemoteScriptAction(Action):
                 private_key_pem=private_key,
                 command_timeout=exec_timeout,
                 known_hosts_path=known_hosts,
+                strict_host_key_checking=bool(strict_hk),
+                auto_add_host_key=auto_add_hk,
+                known_hosts_save_path=save_path_auto,
             )
             ssh.connect()
             ssh.upload_file(local_script, remote_path)

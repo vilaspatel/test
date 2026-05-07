@@ -29,7 +29,9 @@ sudo /opt/stackstorm/st2/bin/st2ctl reload --register-all
 | `allowed_scripts` | Optional list of allowed script basenames or paths |
 | `ssh_port` | Default SSH port (default `22`) |
 | `git_clone_timeout` | Clone timeout seconds (default `600`) |
-| `ssh_known_hosts_path` | Extra `known_hosts` file path |
+| `ssh_known_hosts_path` | Extra `known_hosts` file path (also save target when auto-add is on) |
+| `ssh_strict_host_key_checking` | Default strict verification (default `true`) |
+| `ssh_auto_add_host_key` | Accept unknown keys on first connect and persist (default `false`) |
 
 ## Action: `remote_bash.run_remote_script`
 
@@ -72,7 +74,7 @@ Includes `success`, `stdout`, `stderr`, `exit_code`, `resolved_host`, `ssh_port`
 ## Security notes
 
 - Passwords and keys are **StackStorm secret parameters** — still avoid passing them in shell history where possible; prefer rules/API with encrypted datastore references where your deployment supports it.
-- Pre-load target SSH host keys (`ssh-keyscan`) for the StackStorm runner user.
+- If SSH fails with **`not found in known_hosts`**, run **`ssh-keyscan -H <target_ip> >> ~/.ssh/known_hosts`** as the StackStorm runtime user, or set **`ssh_strict_host_key_checking: false`** in pack config **only for lab testing** (MITM risk).
 - Do **not** put passwords in Git hostfiles — only hostnames/ports there.
 
 ## Examples in this pack

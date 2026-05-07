@@ -44,6 +44,9 @@ class SSHClient:
         banner_timeout: int = 30,
         auth_timeout: int = 30,
         known_hosts_path: Optional[str] = None,
+        strict_host_key_checking: bool = True,
+        auto_add_host_key: bool = False,
+        known_hosts_save_path: Optional[str] = None,
     ) -> None:
         self.hostname = hostname
         self.port = port
@@ -54,6 +57,9 @@ class SSHClient:
         self.banner_timeout = banner_timeout
         self.auth_timeout = auth_timeout
         self.known_hosts_path = known_hosts_path
+        self.strict_host_key_checking = strict_host_key_checking
+        self.auto_add_host_key = auto_add_host_key
+        self.known_hosts_save_path = known_hosts_save_path
         self._client: Optional[paramiko.SSHClient] = None
 
     def connect(self) -> None:
@@ -76,7 +82,19 @@ class SSHClient:
             else:
                 LOG.warning("ssh_known_hosts_path does not exist", extra={"path": extra})
 
-        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        if self.auto_add_host_key:
+            LOG.info(
+                "SSH auto-add host key enabled; new keys will be saved after connect",
+                extra={"save_path": self.known_hosts_save_path or "~/.ssh/known_hosts"},
+            )
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        elif self.strict_host_key_checking:
+            client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        else:
+            LOG.warning(
+                "SSH strict host key checking is disabled (testing/lab only; MITM risk)"
+            )
+            client.set_missing_host_key_policy(paramiko.WarningPolicy())
         pkey = None
         if self.private_key_pem:
             try:
@@ -114,6 +132,21 @@ class SSHClient:
             )
         except (paramiko.SSHException, socket.error, EOFError) as exc:
             raise SSHClientError(f"SSH connect failed: {exc}") from exc
+
+        if self.auto_add_host_key:
+            save_path = self.known_hosts_save_path or os.path.expanduser("~/.ssh/known_hosts")
+            save_dir = os.path.dirname(save_path)
+            try:
+                if save_dir and not os.path.isdir(save_dir):
+                    os.makedirs(save_dir, mode=0o700, exist_ok=True)
+                client.save_host_keys(save_path)
+                LOG.info("Persisted SSH host keys after connect", extra={"path": save_path})
+            except OSError as exc:
+                LOG.warning(
+                    "Could not persist SSH host keys to disk",
+                    extra={"path": save_path, "error": str(exc)},
+                )
+
         self._client = client
 
     def upload_file(self, local_path: Path, remote_path: str) -> None:
