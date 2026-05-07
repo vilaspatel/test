@@ -29,9 +29,6 @@ ALLOWED_SCRIPTS: List[str] = []
 
 HOSTFILE_SUFFIXES: FrozenSet[str] = frozenset({".yaml", ".yml", ".json"})
 
-# StackStorm may omit optional kwargs; use sentinel so pack config is not overwritten by a missing param.
-_SSH_AUTO_ADD_PARAM_UNSET = object()
-
 
 def _coerce_bool(value: Any, default: bool) -> bool:
     """Parse booleans from pack config / StackStorm (bool, int, or string)."""
@@ -109,7 +106,6 @@ class RunRemoteScriptAction(Action):
         ssh_password: Optional[str] = None,
         ssh_private_key: Optional[str] = None,
         ssh_port: Optional[int] = None,
-        ssh_auto_add_host_key: Any = _SSH_AUTO_ADD_PARAM_UNSET,
     ) -> Tuple[bool, Dict[str, Any]]:
         cfg = self.config or {}
         github_token = (cfg.get("github_token") or "").strip() or None
@@ -208,30 +204,25 @@ class RunRemoteScriptAction(Action):
             quoted_remote = shlex.quote(remote_path)
 
             known_hosts = (cfg.get("ssh_known_hosts_path") or "").strip() or None
-            strict_hk = _coerce_bool(cfg.get("ssh_strict_host_key_checking"), True)
+            # Default: accept unknown keys once and persist (no pack config required).
+            # ssh_strict_host_key_checking true => RejectPolicy only (must pre-seed known_hosts).
+            strict_hk = _coerce_bool(cfg.get("ssh_strict_host_key_checking"), False)
+            auto_add_hk = not strict_hk
 
-            auto_add_hk = _coerce_bool(cfg.get("ssh_auto_add_host_key"), False)
-            # StackStorm often passes optional booleans as None when omitted — do not override pack config then.
-            if ssh_auto_add_host_key is not _SSH_AUTO_ADD_PARAM_UNSET and ssh_auto_add_host_key is not None:
-                auto_add_hk = _coerce_bool(ssh_auto_add_host_key, False)
+            save_path_auto = (
+                os.path.expanduser(known_hosts)
+                if known_hosts
+                else os.path.expanduser("~/.ssh/known_hosts")
+            )
 
             LOG.info(
                 "SSH host key settings resolved",
                 extra={
                     "auto_add_host_key": auto_add_hk,
                     "strict_host_key_checking": strict_hk,
-                    "override_from_action": ssh_auto_add_host_key is not _SSH_AUTO_ADD_PARAM_UNSET
-                    and ssh_auto_add_host_key is not None,
+                    "known_hosts_save_path": save_path_auto if auto_add_hk else None,
                 },
             )
-
-            save_path_auto: Optional[str] = None
-            if auto_add_hk:
-                save_path_auto = (
-                    os.path.expanduser(known_hosts)
-                    if known_hosts
-                    else os.path.expanduser("~/.ssh/known_hosts")
-                )
 
             ssh = SSHClient(
                 hostname=resolved_host,
@@ -243,7 +234,7 @@ class RunRemoteScriptAction(Action):
                 known_hosts_path=known_hosts,
                 strict_host_key_checking=strict_hk,
                 auto_add_host_key=auto_add_hk,
-                known_hosts_save_path=save_path_auto,
+                known_hosts_save_path=save_path_auto if auto_add_hk else None,
             )
             ssh.connect()
             ssh.upload_file(local_script, remote_path)

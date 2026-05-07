@@ -25,21 +25,14 @@ git_clone_timeout:
   default: 600
 ssh_known_hosts_path:
   description: >
-    Optional extra known_hosts file merged with the StackStorm user system keys.
+    Optional known_hosts file to load and persist new keys into (same path).
+    When unset, ~/.ssh/known_hosts is used.
   type: string
   required: false
 ssh_strict_host_key_checking:
   description: >
-    When true (default), refuse SSH if the host key is not in known_hosts.
-    Set false only for testing (MITM risk). Ignored when ssh_auto_add_host_key is true.
-  type: boolean
-  required: false
-  default: true
-ssh_auto_add_host_key:
-  description: >
-    When true, unknown server keys are accepted and written to known_hosts after a
-    successful connect (path: ssh_known_hosts_path if set, else ~/.ssh/known_hosts).
-    First connection trusts the server key on that hop (MITM risk on first connect).
+    When false (default), unknown keys are accepted once and saved. When true,
+    require host keys to exist already (RejectPolicy).
   type: boolean
   required: false
   default: false

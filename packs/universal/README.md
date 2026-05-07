@@ -21,7 +21,7 @@ Production-oriented StackStorm pack for cloning bash scripts from GitHub and exe
 - StackStorm with Python 3 action runners  
 - `git` available on the StackStorm runner host  
 - Network access from the runner to GitHub, Delinea, and target SSH endpoints  
-- Target host public SSH host keys present for the StackStorm service user (see **SSH host keys** below)
+- Writable home for the StackStorm runtime user so **`~/.ssh/known_hosts`** can be updated on first connect (see **SSH host keys**), unless you enable strict-only mode
 
 Python dependencies are declared in `requirements.txt` (`requests`, `paramiko`, `PyYAML`).
 
@@ -74,20 +74,11 @@ allowed_scripts: []                    # optional basename allowlist, e.g. ["dep
 ssh_port: 22
 git_clone_timeout: 600
 delinea_request_timeout: 60
-ssh_known_hosts_path: "/home/stanley/.ssh/stackstorm_known_hosts"
-ssh_strict_host_key_checking: true   # false = lab only (see SSH host keys)
-ssh_auto_add_host_key: false         # true = accept & save new keys on first connect
+ssh_known_hosts_path: "/home/stanley/.ssh/stackstorm_known_hosts"  # optional; else ~/.ssh/known_hosts
+ssh_strict_host_key_checking: false  # default: auto-accept & save new keys (see SSH host keys)
 ```
 
 Pack config validation allows **no Delinea keys** in `universal.yaml`. Runtime checks still apply: `get_delinea_secret` and `run_remote_script` with `delinea_secret_id` require those settings to be present and complete.
-
-### `ssh_auto_add_host_key` not taking effect
-
-After editing `/opt/stackstorm/configs/universal.yaml`, run **`sudo st2ctl reload --register-configs`** (or `--register-all`). Then confirm live config: **`st2 pack config universal`**.
-
-Each action execution logs **`SSH host key settings resolved`** with **`auto_add_host_key`** — it must be **`true`** before SSH connects. If it is **`false`**, the runner may still be serving old config, or StackStorm passed a **null** action parameter that cleared the flag — omit optional **`ssh_auto_add_host_key`** on `st2 run`, or pass **`ssh_auto_add_host_key=true`** once to force auto-add regardless of cache.
-
-YAML boolean must be literal **`true`** / **`false`** (not quoted strings like `"true"` unless they parse as booleans for your StackStorm version).
 
 ### Delinea Secret Server setup
 
@@ -122,25 +113,16 @@ Credentials remain in **Delinea** only—the hostfile must **not** contain passw
 
 ### SSH host keys
 
-If you see **`Server 'x.x.x.x' not found in known_hosts`**, Paramiko is using strict verification: the target’s SSH host key is not in any loaded `known_hosts` file for the StackStorm service account.
+**Default (no extra config):** on first SSH to a new host, the action **accepts the server host key** (`AutoAddPolicy`), connects, then **`save_host_keys`** persists it to **`~/.ssh/known_hosts`** for the StackStorm runtime user (creating **`~/.ssh`** with mode `0700` if needed). If **`ssh_known_hosts_path`** is set, new keys are saved to **that same file** (and it is loaded together with system keys). No `ssh_auto_add_*` setting is required.
 
-**Production fix (recommended):** add the host key on the **same machine that runs StackStorm actions** (the user that executes `st2`, often `stanley` or `root`):
+**Strict mode (optional):** set **`ssh_strict_host_key_checking: true`** in pack config. Then unknown hosts are **rejected** until their keys exist in `known_hosts` (use **`ssh-keyscan`** ahead of time for production).
 
-```bash
-ssh-keyscan -H 40.67.169.124 >> ~/.ssh/known_hosts
-# or append to the file referenced by pack config ssh_known_hosts_path
-```
-
-Use your real IP/hostname and the correct user home directory.
-
-**Lab / quick test only:** set pack config **`ssh_strict_host_key_checking: false`**. This uses Paramiko’s `WarningPolicy` so unknown hosts are allowed (with a warning log). **Do not use in production** — it weakens protection against machine-in-the-middle attacks.
-
-**Automatic trust-on-first-use (optional):** set **`ssh_auto_add_host_key: true`**. On first connect to an unknown host, Paramiko accepts the server key (`AutoAddPolicy`), then **`save_host_keys`** writes it to disk—by default **`~/.ssh/known_hosts`**, or to **`ssh_known_hosts_path`** when that pack setting is set (same path used for loading extra keys). The next run loads that key and behaves like strict verification for that host. **Security note:** the very first connection still trusts whatever key the server presents on that attempt (MITM risk on that hop); prefer **`ssh-keyscan`** ahead of time for production.
+If you still see **`not found in known_hosts`**, you likely enabled strict mode or the runtime user cannot write **`~/.ssh/known_hosts`** (permissions / read-only home).
 
 `SSHClient` loads:
 
-1. The StackStorm service user’s system `known_hosts` (typically `/home/stanley/.ssh/known_hosts` or `/root/.ssh/known_hosts` depending on deployment).
-2. Optionally `ssh_known_hosts_path` from pack config.
+1. The StackStorm service user’s system `known_hosts`.
+2. Optionally **`ssh_known_hosts_path`** from pack config.
 
 ## Security model
 
@@ -149,6 +131,7 @@ Use your real IP/hostname and the correct user home directory.
 - **Allowlist** — optional `allowed_scripts` (basenames or full relative paths) merged with in-code `ALLOWED_SCRIPTS`.
 - **Temporary artifacts** — shallow clone directories are removed after execution; remote script remains on target under `/tmp/` (rotation/cleanup is target-side responsibility).
 - **No `shell=True`** — `git` uses argv lists; remote commands use `exec_command` with explicit quoting via `shlex.quote`.
+- **SSH host keys** — by default the action accepts a new host key once and saves it under **`~/.ssh/known_hosts`** for the runtime user; set **`ssh_strict_host_key_checking: true`** only when you require keys to be pre-seeded (no automatic save).
 
 ### Recommendations
 
@@ -287,7 +270,7 @@ For host inventories, copy `examples/hosts.example.yaml` into your repo (for exa
 
 | Symptom | Likely cause | Mitigation |
 |---------|----------------|------------|
-| `not found in known_hosts` / Paramiko rejection | Target key not in `known_hosts` for the ST2 runner user | Run `ssh-keyscan -H <host> >> ~/.ssh/known_hosts` on the runner, or set `ssh_strict_host_key_checking: false` **only for testing**. |
+| `not found in known_hosts` / Paramiko rejection | **`ssh_strict_host_key_checking: true`** or cannot write `~/.ssh/known_hosts` | Set **`ssh_strict_host_key_checking: false`** (default) for auto-save, or pre-seed keys with **`ssh-keyscan`**, or fix permissions on `~/.ssh`. |
 | `git clone` failure | Auth, DNS, or branch name | Verify PAT for private repos; confirm branch exists; check runner outbound HTTPS. |
 | Delinea HTTP 401/403 | Wrong OAuth scopes or secret ID | Validate client credentials grant and RBAC on the secret. |
 | `script is not in the allowlist` | `allowed_scripts` configured | Add basename or relative path, or clear allowlist for path-only checks. |

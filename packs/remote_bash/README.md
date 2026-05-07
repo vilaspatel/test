@@ -10,7 +10,7 @@ Unlike the `universal` pack, there is **no Secret Server**: SSH credentials are 
 - Password or PEM key authentication (**Paramiko**)
 - Optional **hostfile** in the repo (YAML/JSON) to resolve `target_host` / port by logical name
 - Path traversal checks; optional **`allowed_scripts`** allowlist in pack config
-- Strict SSH host keys (`RejectPolicy` after loading system + optional `ssh_known_hosts_path`)
+- SSH host keys: by default **accept once and save** to `~/.ssh/known_hosts` (or `ssh_known_hosts_path`); optional **`ssh_strict_host_key_checking: true`** for pre-seeded keys only
 
 ## Install
 
@@ -29,9 +29,8 @@ sudo /opt/stackstorm/st2/bin/st2ctl reload --register-all
 | `allowed_scripts` | Optional list of allowed script basenames or paths |
 | `ssh_port` | Default SSH port (default `22`) |
 | `git_clone_timeout` | Clone timeout seconds (default `600`) |
-| `ssh_known_hosts_path` | Extra `known_hosts` file path (also save target when auto-add is on) |
-| `ssh_strict_host_key_checking` | Default strict verification (default `true`) |
-| `ssh_auto_add_host_key` | Accept unknown keys on first connect and persist (default `false`) |
+| `ssh_known_hosts_path` | Optional file to load/save host keys (default: `~/.ssh/known_hosts`) |
+| `ssh_strict_host_key_checking` | If `true`, unknown hosts are rejected until keys exist (default `false`) |
 
 ## Action: `remote_bash.run_remote_script`
 
@@ -74,7 +73,7 @@ Includes `success`, `stdout`, `stderr`, `exit_code`, `resolved_host`, `ssh_port`
 ## Security notes
 
 - Passwords and keys are **StackStorm secret parameters** — still avoid passing them in shell history where possible; prefer rules/API with encrypted datastore references where your deployment supports it.
-- If SSH fails with **`not found in known_hosts`**, run **`ssh-keyscan -H <target_ip> >> ~/.ssh/known_hosts`** as the StackStorm runtime user, or set **`ssh_strict_host_key_checking: false`** in pack config **only for lab testing** (MITM risk).
+- By default new hosts are added to **`~/.ssh/known_hosts`** automatically. If you enabled **`ssh_strict_host_key_checking: true`**, pre-seed keys with **`ssh-keyscan`** or turn strict off.
 - Do **not** put passwords in Git hostfiles — only hostnames/ports there.
 
 ## Examples in this pack

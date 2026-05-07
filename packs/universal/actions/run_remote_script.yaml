@@ -71,12 +71,6 @@ parameters:
     description: >
       Optional SSH port override; defaults to pack config ssh_port or 22.
     required: false
-  ssh_auto_add_host_key:
-    type: boolean
-    description: >
-      If set, overrides pack config ssh_auto_add_host_key. When true, unknown host keys
-      are accepted and saved after connect (see README).
-    required: false
 output_schema:
   type: object
   properties:

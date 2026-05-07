@@ -49,27 +49,15 @@ delinea_request_timeout:
   default: 60
 ssh_known_hosts_path:
   description: >
-    Optional additional known_hosts file merged after loading the StackStorm user
-    system keys (~/.ssh/known_hosts). Required entries must exist when using strict
-    host key checking (recommended).
+    Optional known_hosts file to load and to persist new host keys into (same path).
+    When unset, ~/.ssh/known_hosts is used for both load (with system keys) and save.
   type: string
   required: false
 ssh_strict_host_key_checking:
   description: >
-    When true (default), refuse SSH if the target host key is not in known_hosts
-    (RejectPolicy). Set to false only for lab/testing — connections may be vulnerable
-    to machine-in-the-middle attacks. Production: keep true and add keys with ssh-keyscan.
-    Ignored when ssh_auto_add_host_key is true (new keys are accepted and saved).
-  type: boolean
-  required: false
-  default: true
-ssh_auto_add_host_key:
-  description: >
-    When true, unknown server host keys are accepted (AutoAddPolicy), then written to
-    known_hosts after a successful connection so later runs verify normally. Saves to
-    ssh_known_hosts_path if set, otherwise ~/.ssh/known_hosts. First connection still
-    trusts the server identity on that hop (MITM risk on first connect); prefer manual
-    ssh-keyscan in production.
+    When false (default), unknown SSH host keys are accepted on first connect and saved
+    under ~/.ssh/known_hosts (or ssh_known_hosts_path). When true, require the host key
+    to exist already (RejectPolicy); use for hardened environments with pre-seeded keys.
   type: boolean
   required: false
   default: false

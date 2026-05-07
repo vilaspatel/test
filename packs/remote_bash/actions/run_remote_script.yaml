@@ -56,10 +56,6 @@ parameters:
     type: integer
     description: Overrides hostfile/default SSH port when set.
     required: false
-  ssh_auto_add_host_key:
-    type: boolean
-    description: Overrides pack config; accept and persist new SSH host keys.
-    required: false
 output_schema:
   type: object
   properties:
