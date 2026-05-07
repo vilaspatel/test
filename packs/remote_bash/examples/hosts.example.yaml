@@ -5,12 +5,5 @@
 #
 # Credentials are NOT stored here — pass ssh_username / ssh_password on the action.
 
-linux-prod-01: "10.0.0.5"
+linux-prod-01: "172.185.164.165"
 
-prod-web-02:
-  host: web.internal.example.com
-  port: 22
-
-jump-host:
-  hostname: bastion.example.com
-  ssh_port: 2222
