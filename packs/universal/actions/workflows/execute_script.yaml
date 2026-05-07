@@ -1,0 +1,35 @@
+version: 1.0
+description: >
+  Retrieve SSH credentials from Delinea Secret Server, then clone a GitHub
+  repository and execute a validated bash script on the target Linux host via SSH.
+input:
+  - github_repo
+  - github_branch
+  - script_path
+  - target_host
+  - hostfile_path
+  - host_entry
+  - delinea_secret_id
+  - timeout
+tasks:
+  retrieve_credentials:
+    action: universal.get_delinea_secret
+    input:
+      secret_id: <% ctx().delinea_secret_id %>
+    next:
+      - run_remote
+  run_remote:
+    action: universal.run_remote_script
+    input:
+      github_repo: <% ctx().github_repo %>
+      github_branch: <% ctx().github_branch %>
+      script_path: <% ctx().script_path %>
+      target_host: <% ctx().target_host %>
+      hostfile_path: <% ctx().hostfile_path %>
+      host_entry: <% ctx().host_entry %>
+      timeout: <% coalesce(ctx().timeout, 3600) %>
+      ssh_username: <% task(retrieve_credentials).result.result.ssh_username %>
+      ssh_password: <% task(retrieve_credentials).result.result.ssh_password %>
+      ssh_private_key: <% task(retrieve_credentials).result.result.ssh_private_key %>
+output:
+  - execution_result: <% task(run_remote).result.result %>

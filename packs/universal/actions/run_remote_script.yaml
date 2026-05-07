@@ -1,0 +1,86 @@
+---
+name: run_remote_script
+description: >
+  Clone a GitHub repository (optionally private), validate a .sh script path,
+  upload it to the target Linux host, chmod +x, execute with /bin/bash, and
+  return stdout/stderr/exit code. Target may be target_host or resolved from a
+  YAML/JSON hostfile committed in the repo (hostfile_path + host_entry).
+  Credentials may be supplied inline (for workflows) or retrieved via delinea_secret_id.
+runner_type: python-script
+enabled: true
+entry_point: run_remote_script.py
+parameters:
+  github_repo:
+    type: string
+    description: >
+      Git clone URL (https://github.com/org/repo.git, git@github.com:org/repo.git, etc.).
+    required: true
+  github_branch:
+    type: string
+    description: Branch or tag to shallow-clone.
+    required: true
+  script_path:
+    type: string
+    description: >
+      Repository-relative path to the bash script (no ../, must end with .sh).
+    required: true
+  target_host:
+    type: string
+    description: >
+      Hostname or IP when not using a Git-hosted hostfile. Omit when using
+      hostfile_path + host_entry (they resolve the target after clone).
+    required: false
+  hostfile_path:
+    type: string
+    description: >
+      Repository-relative path to a host inventory file (.yaml, .yml, or .json)
+      in the same cloned repo. Must be used together with host_entry.
+    required: false
+  host_entry:
+    type: string
+    description: >
+      Logical name of the host entry within hostfile_path (key in the YAML/JSON map).
+    required: false
+  timeout:
+    type: integer
+    description: Remote command execution timeout in seconds (SSH exec).
+    required: false
+    default: 3600
+  delinea_secret_id:
+    type: string
+    description: >
+      Optional Delinea secret ID when credentials should be fetched inside this action.
+      Omit when passing ssh_username / ssh_password / ssh_private_key explicitly.
+    required: false
+  ssh_username:
+    type: string
+    description: SSH username (typically supplied by universal.get_delinea_secret in workflows).
+    required: false
+  ssh_password:
+    type: string
+    description: SSH password when using password authentication.
+    secret: true
+    required: false
+  ssh_private_key:
+    type: string
+    description: PEM-encoded SSH private key when using key authentication.
+    secret: true
+    required: false
+  ssh_port:
+    type: integer
+    description: >
+      Optional SSH port override; defaults to pack config ssh_port or 22.
+    required: false
+output_schema:
+  type: object
+  properties:
+    success: { type: boolean }
+    stdout: { type: string }
+    stderr: { type: string }
+    exit_code: { type: integer }
+    remote_script_path: { type: string }
+    resolved_host: { type: string }
+    ssh_port: { type: integer }
+    host_entry: { type: string }
+    hostfile_path: { type: string }
+    error: { type: string }

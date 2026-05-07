@@ -1,0 +1,16 @@
+# Example Git-hosted host inventory for remote_bash.run_remote_script
+#
+# Commit as e.g. inventory/hosts.yaml and pass:
+#   hostfile_path=inventory/hosts.yaml  host_entry=linux-prod-01
+#
+# Credentials are NOT stored here — pass ssh_username / ssh_password on the action.
+
+linux-prod-01: "10.0.0.5"
+
+prod-web-02:
+  host: web.internal.example.com
+  port: 22
+
+jump-host:
+  hostname: bastion.example.com
+  ssh_port: 2222

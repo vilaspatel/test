@@ -1,0 +1,17 @@
+# Example Git-hosted host inventory for universal.run_remote_script
+#
+# Commit a copy as e.g. inventory/hosts.yaml and pass:
+#   hostfile_path=inventory/hosts.yaml  host_entry=prod-web-01
+#
+# Short form: entry maps to hostname or IP only (SSH port from pack config or ssh_port).
+# Mapping form: optional port / ssh_port per host.
+
+linux-prod-01: "10.0.0.5"
+
+prod-web-02:
+  host: web.internal.example.com
+  port: 22
+
+jump-host:
+  hostname: bastion.example.com
+  ssh_port: 2222

@@ -1,0 +1,16 @@
+---
+ref: remote_bash
+name: remote_bash
+description: >
+  Execute GitHub-hosted bash scripts on remote Linux VMs over SSH using credentials
+  supplied at invocation (password or PEM key). Optional Git-hosted hostfile for targets.
+version: 1.0.0
+author: Pack Maintainers
+email: team@example.com
+python_versions:
+  - "3"
+keywords:
+  - bash
+  - github
+  - ssh
+  - remote-execution

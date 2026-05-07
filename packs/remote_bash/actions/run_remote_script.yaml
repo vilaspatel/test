@@ -1,0 +1,71 @@
+---
+name: run_remote_script
+description: >
+  Shallow-clone a GitHub repo, validate a .sh script, upload to the target Linux host
+  over SSH using ssh_username plus ssh_password or ssh_private_key (passed as inputs),
+  chmod +x, run with /bin/bash. Target is target_host or resolved from an optional
+  YAML/JSON hostfile in the repo.
+runner_type: python-script
+enabled: true
+entry_point: run_remote_script.py
+parameters:
+  github_repo:
+    type: string
+    description: Git clone URL (https or git@github.com SSH).
+    required: true
+  github_branch:
+    type: string
+    description: Branch or tag to clone.
+    required: true
+  script_path:
+    type: string
+    description: Repository-relative path to the .sh script (no ../).
+    required: true
+  ssh_username:
+    type: string
+    description: SSH user on the target VM.
+    required: true
+  ssh_password:
+    type: string
+    description: SSH password (omit if using ssh_private_key).
+    secret: true
+    required: false
+  ssh_private_key:
+    type: string
+    description: PEM-encoded private key (omit if using ssh_password).
+    secret: true
+    required: false
+  target_host:
+    type: string
+    description: Hostname or IP when not using a Git-hosted hostfile.
+    required: false
+  hostfile_path:
+    type: string
+    description: Repo-relative host inventory (.yaml, .yml, .json); use with host_entry.
+    required: false
+  host_entry:
+    type: string
+    description: Key in hostfile_path for target host/port.
+    required: false
+  timeout:
+    type: integer
+    description: Remote SSH command timeout in seconds.
+    required: false
+    default: 3600
+  ssh_port:
+    type: integer
+    description: Overrides hostfile/default SSH port when set.
+    required: false
+output_schema:
+  type: object
+  properties:
+    success: { type: boolean }
+    stdout: { type: string }
+    stderr: { type: string }
+    exit_code: { type: integer }
+    remote_script_path: { type: string }
+    resolved_host: { type: string }
+    ssh_port: { type: integer }
+    host_entry: { type: string }
+    hostfile_path: { type: string }
+    error: { type: string }

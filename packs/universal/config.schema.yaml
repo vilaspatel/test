@@ -1,0 +1,55 @@
+---
+delinea_url:
+  description: >
+    Base URL for Delinea Secret Server (e.g. https://tenant.secretservercloud.com
+    or https://secretserver.example.com).
+  type: string
+  required: true
+delinea_client_id:
+  description: OAuth2 client ID for Delinea Secret Server API (client credentials).
+  type: string
+  required: true
+delinea_client_secret:
+  description: OAuth2 client secret for Delinea Secret Server API.
+  type: string
+  secret: true
+  required: true
+github_token:
+  description: >
+    Optional GitHub personal access token for cloning private repositories.
+    Store via StackStorm datastore or encrypted config.
+  type: string
+  secret: true
+  required: false
+allowed_scripts:
+  description: >
+    Optional allowlist of script basenames (e.g. ["deploy.sh", "patch.sh"]).
+    When non-empty, only listed scripts may run. When empty, only path/extension
+    validation applies.
+  type: array
+  items:
+    type: string
+  required: false
+  default: []
+ssh_port:
+  description: SSH port on target hosts when not overridden per execution.
+  type: integer
+  required: false
+  default: 22
+git_clone_timeout:
+  description: Default timeout in seconds for git clone operations.
+  type: integer
+  required: false
+  default: 600
+delinea_request_timeout:
+  description: HTTP timeout in seconds for Delinea API calls.
+  type: integer
+  required: false
+  default: 60
+ssh_known_hosts_path:
+  description: >
+    Optional additional known_hosts file merged after loading the StackStorm user
+    system keys (~/.ssh/known_hosts). Required entries must exist when using strict
+    host key checking (recommended).
+  type: string
+  required: false

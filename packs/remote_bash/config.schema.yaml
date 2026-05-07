@@ -1,0 +1,30 @@
+---
+github_token:
+  description: >
+    Optional GitHub personal access token for cloning private repositories.
+  type: string
+  secret: true
+  required: false
+allowed_scripts:
+  description: >
+    Optional allowlist of script basenames or repo-relative paths.
+  type: array
+  items:
+    type: string
+  required: false
+  default: []
+ssh_port:
+  description: Default SSH port when not overridden per run or by hostfile.
+  type: integer
+  required: false
+  default: 22
+git_clone_timeout:
+  description: Timeout in seconds for git clone operations.
+  type: integer
+  required: false
+  default: 600
+ssh_known_hosts_path:
+  description: >
+    Optional extra known_hosts file merged with the StackStorm user system keys.
+  type: string
+  required: false
