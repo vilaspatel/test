@@ -1,21 +1,24 @@
 version: 1.0
 description: >
   Retrieve SSH credentials from Delinea Secret Server or Azure Key Vault, then
-  clone a GitHub repository and execute a validated bash script on one target host.
+  fan out Git-hosted bash script execution across many target hosts.
 input:
   - github_repo
   - github_branch
   - script_path
-  - target_host
-  - hostfile_path
-  - host_entry
+  - target_hosts
   - script_args
   - secret_source
   - delinea_secret_id
   - key_vault_secret_name
   - key_vault_secret_version
   - ssh_username
-  - timeout
+  - per_host_timeout
+  - concurrency
+  - batch_size
+  - retries
+  - retry_delay
+  - ssh_port
 tasks:
   choose_secret_source:
     action: core.noop
@@ -32,7 +35,7 @@ tasks:
     input:
       secret_id: <% ctx().delinea_secret_id %>
     next:
-      - run_remote_delinea
+      - run_remote_fanout_delinea
 
   retrieve_key_vault_private_key:
     action: universal.get_azure_key_vault_private_key
@@ -40,35 +43,48 @@ tasks:
       secret_name: <% ctx().key_vault_secret_name %>
       secret_version: <% ctx().key_vault_secret_version %>
     next:
-      - run_remote_key_vault
+      - run_remote_fanout_key_vault
 
-  run_remote_delinea:
+  run_remote_fanout_delinea:
+    with:
+      items: host in <% ctx().target_hosts %>
+      concurrency: <% coalesce(ctx().concurrency, ctx().batch_size, 25) %>
+    retry:
+      when: <% failed() %>
+      count: <% coalesce(ctx().retries, 0) %>
+      delay: <% coalesce(ctx().retry_delay, 10) %>
     action: universal.run_remote_script
     input:
       github_repo: <% ctx().github_repo %>
       github_branch: <% ctx().github_branch %>
       script_path: <% ctx().script_path %>
-      target_host: <% ctx().target_host %>
-      hostfile_path: <% ctx().hostfile_path %>
-      host_entry: <% ctx().host_entry %>
+      target_host: <% item(host) %>
       script_args: <% ctx().script_args %>
-      timeout: <% coalesce(ctx().timeout, 3600) %>
+      timeout: <% coalesce(ctx().per_host_timeout, 3600) %>
       ssh_username: <% task(retrieve_delinea_credentials).result.result.ssh_username %>
       ssh_password: <% task(retrieve_delinea_credentials).result.result.ssh_password %>
       ssh_private_key: <% task(retrieve_delinea_credentials).result.result.ssh_private_key %>
+      ssh_port: <% ctx().ssh_port %>
 
-  run_remote_key_vault:
+  run_remote_fanout_key_vault:
+    with:
+      items: host in <% ctx().target_hosts %>
+      concurrency: <% coalesce(ctx().concurrency, ctx().batch_size, 25) %>
+    retry:
+      when: <% failed() %>
+      count: <% coalesce(ctx().retries, 0) %>
+      delay: <% coalesce(ctx().retry_delay, 10) %>
     action: universal.run_remote_script
     input:
       github_repo: <% ctx().github_repo %>
       github_branch: <% ctx().github_branch %>
       script_path: <% ctx().script_path %>
-      target_host: <% ctx().target_host %>
-      hostfile_path: <% ctx().hostfile_path %>
-      host_entry: <% ctx().host_entry %>
+      target_host: <% item(host) %>
       script_args: <% ctx().script_args %>
-      timeout: <% coalesce(ctx().timeout, 3600) %>
+      timeout: <% coalesce(ctx().per_host_timeout, 3600) %>
       ssh_username: <% ctx().ssh_username %>
       ssh_private_key: <% task(retrieve_key_vault_private_key).result.result.ssh_private_key %>
+      ssh_port: <% ctx().ssh_port %>
+
 output:
-  - execution_result: <% coalesce(task(run_remote_delinea).result.result, task(run_remote_key_vault).result.result) %>
+  - fanout_result: <% coalesce(task(run_remote_fanout_delinea).result, task(run_remote_fanout_key_vault).result) %>

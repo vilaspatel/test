@@ -53,6 +53,7 @@ class RunAnsiblePlaybookAction(Action):
         ssh_username: Optional[str] = None,
         ssh_private_key: Optional[str] = None,
         ssh_port: Optional[int] = None,
+        forks: Optional[int] = None,
         extra_vars: Optional[Any] = None,
         limit: Optional[str] = None,
         tags: Optional[List[Any]] = None,
@@ -72,6 +73,9 @@ class RunAnsiblePlaybookAction(Action):
             _validate_repo_relative_path("inventory_path", inventory_path, INVENTORY_SUFFIXES)
             tags_list = _normalize_str_list("tags", tags)
             skip_tags_list = _normalize_str_list("skip_tags", skip_tags)
+            forks_int = int(forks) if forks is not None else None
+            if forks_int is not None and forks_int < 1:
+                raise ValueError("forks must be >= 1")
         except ValueError as exc:
             return False, {"success": False, "error": str(exc), "stdout": "", "stderr": "", "exit_code": -1}
 
@@ -102,6 +106,8 @@ class RunAnsiblePlaybookAction(Action):
 
             if ssh_port is not None:
                 cmd.extend(["--extra-vars", f"ansible_port={int(ssh_port)}"])
+            if forks_int is not None:
+                cmd.extend(["--forks", str(forks_int)])
 
             if limit and str(limit).strip():
                 cmd.extend(["--limit", str(limit).strip()])
@@ -145,6 +151,7 @@ class RunAnsiblePlaybookAction(Action):
                 "exit_code": int(proc.returncode),
                 "playbook_path": playbook_path,
                 "inventory_path": inventory_path,
+                "forks": forks_int,
             }
         except subprocess.TimeoutExpired:
             return False, {

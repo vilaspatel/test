@@ -36,6 +36,11 @@ parameters:
     type: integer
     description: Optional SSH port override (passed as ansible_port extra var).
     required: false
+  forks:
+    type: integer
+    description: >
+      Optional Ansible worker process count (--forks). Increase for large host fleets.
+    required: false
   extra_vars:
     type: string
     description: >
@@ -89,4 +94,5 @@ output_schema:
     exit_code: { type: integer }
     playbook_path: { type: string }
     inventory_path: { type: string }
+    forks: { type: integer }
     error: { type: string }

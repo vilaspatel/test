@@ -1,0 +1,60 @@
+---
+name: execute_script
+description: >
+  Workflow: retrieve SSH credentials from Delinea Secret Server or Azure Key
+  Vault, then run a Git-hosted bash script on a single target host.
+runner_type: orquesta
+enabled: true
+entry_point: workflows/execute_script.yaml
+parameters:
+  github_repo:
+    type: string
+    required: true
+  github_branch:
+    type: string
+    required: true
+  script_path:
+    type: string
+    required: true
+  target_host:
+    type: string
+    required: false
+  hostfile_path:
+    type: string
+    required: false
+  host_entry:
+    type: string
+    required: false
+  script_args:
+    type: array
+    required: false
+    default: []
+    items:
+      type: string
+  secret_source:
+    type: string
+    description: "Credential source: delinea (default) or key_vault."
+    required: false
+    default: delinea
+  delinea_secret_id:
+    type: string
+    required: false
+  key_vault_secret_name:
+    type: string
+    required: false
+  key_vault_secret_version:
+    type: string
+    required: false
+  ssh_username:
+    type: string
+    description: "Required when secret_source is key_vault."
+    required: false
+  timeout:
+    type: integer
+    required: false
+    default: 3600
+output_schema:
+  type: object
+  properties:
+    execution_result:
+      type: object

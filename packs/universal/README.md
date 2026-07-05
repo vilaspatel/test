@@ -17,6 +17,7 @@ It supports:
 | `actions/get_delinea_private_key.py` | Fetch private key (and username) from Delinea |
 | `actions/get_azure_key_vault_private_key.py` | Fetch private key from Azure Key Vault |
 | `actions/workflows/execute_script.yaml` | Orquesta workflow for Delinea + script execution |
+| `actions/workflows/execute_script_fanout.yaml` | Orquesta workflow for high-scale parallel execution |
 
 ## Requirements
 
@@ -96,6 +97,7 @@ Runs a repo-hosted Ansible playbook with a repo-hosted inventory.
 Key parameters:
 - `github_repo`, `github_branch`, `playbook_path`, `inventory_path`
 - optional SSH overrides: `ssh_username`, `ssh_private_key`, `ssh_port`
+- scale control: `forks` (maps to `ansible-playbook --forks`)
 - Ansible options: `extra_vars`, `limit`, `tags`, `skip_tags`, `check_mode`, `diff_mode`
 
 Example:
@@ -106,6 +108,7 @@ st2 run universal.run_ansible_playbook \
   github_branch=main \
   playbook_path=playbooks/site.yml \
   inventory_path=inventory/prod.ini \
+  forks=100 \
   ssh_username=ec2-user \
   ssh_private_key="$(cat /path/to/id_rsa)" \
   extra_vars='{"release":"2026.07.05","env":"prod"}' \
@@ -129,10 +132,53 @@ Fetches normalized `ssh_username`, `ssh_password`, and `ssh_private_key` from De
 
 ### `universal.execute_script`
 Orquesta workflow:
-1. `get_delinea_secret`
+1. Retrieve credentials from selected source (`delinea` or `key_vault`)
 2. `run_remote_script`
 
 Now also accepts and passes `script_args`.
+For Key Vault mode, pass `secret_source=key_vault`, `key_vault_secret_name`, and `ssh_username`.
+
+### `universal.execute_script_fanout`
+Orquesta fan-out workflow for large host fleets:
+1. `get_delinea_secret` once
+2. `run_remote_script` across `target_hosts` with controlled parallelism
+
+Scale parameters:
+- `concurrency`: max in-flight hosts
+- `batch_size`: alias for concurrency window when `concurrency` is omitted
+- `per_host_timeout`: timeout per host execution
+- `retries` and `retry_delay`: retry failed host executions
+
+Example:
+
+```bash
+st2 run universal.execute_script_fanout \
+  github_repo=https://github.com/org/scripts.git \
+  github_branch=main \
+  script_path=scripts/deploy.sh \
+  target_hosts='["10.0.0.11","10.0.0.12","10.0.0.13"]' \
+  delinea_secret_id=linux-prod-key \
+  concurrency=50 \
+  retries=1 \
+  retry_delay=20 \
+  per_host_timeout=1800 \
+  script_args='["prod","release-2026.07.05"]'
+```
+
+Key Vault example:
+
+```bash
+st2 run universal.execute_script_fanout \
+  github_repo=https://github.com/org/scripts.git \
+  github_branch=main \
+  script_path=scripts/deploy.sh \
+  target_hosts='["10.0.0.11","10.0.0.12"]' \
+  secret_source=key_vault \
+  key_vault_secret_name=linux-ssh-private-key \
+  ssh_username=ec2-user \
+  concurrency=50 \
+  per_host_timeout=1800
+```
 
 ## Security notes
 
