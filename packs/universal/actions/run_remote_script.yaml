@@ -41,6 +41,14 @@ parameters:
     description: >
       Logical name of the host entry within hostfile_path (key in the YAML/JSON map).
     required: false
+  script_args:
+    type: array
+    description: >
+      Optional positional arguments passed to the script, preserving order.
+    required: false
+    default: []
+    items:
+      type: string
   timeout:
     type: integer
     description: Remote command execution timeout in seconds (SSH exec).

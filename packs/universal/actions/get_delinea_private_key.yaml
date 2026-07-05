@@ -1,0 +1,20 @@
+---
+name: get_delinea_private_key
+description: >
+  Retrieve SSH private key material (and username when available) from Delinea
+  Secret Server for passwordless SSH actions.
+runner_type: python-script
+enabled: true
+entry_point: get_delinea_private_key.py
+parameters:
+  secret_id:
+    type: string
+    description: Delinea Secret Server secret identifier.
+    required: true
+output_schema:
+  type: object
+  properties:
+    success: { type: boolean }
+    ssh_username: { type: string }
+    ssh_private_key: { type: string }
+    error: { type: string }

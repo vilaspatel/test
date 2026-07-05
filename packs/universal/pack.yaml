@@ -3,8 +3,8 @@ ref: universal
 name: universal
 description: >
   Execute GitHub-hosted bash scripts on remote Linux VMs using SSH credentials
-  retrieved from Delinea Secret Server. Includes Orquesta workflow orchestration,
-  path validation, and secure secret handling.
+  retrieved from Delinea Secret Server or Azure Key Vault. Includes Ansible
+  playbook execution, Orquesta workflows, path validation, and secure secret handling.
 version: 1.0.0
 author: Pack Maintainers
 email: team@example.com
@@ -15,6 +15,8 @@ keywords:
   - github
   - ssh
   - delinea
+  - key-vault
+  - ansible
   - secret-server
   - remote-execution
   - stackstorm

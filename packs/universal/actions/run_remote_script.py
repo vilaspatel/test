@@ -100,6 +100,7 @@ class RunRemoteScriptAction(Action):
         target_host: Optional[str] = None,
         hostfile_path: Optional[str] = None,
         host_entry: Optional[str] = None,
+        script_args: Optional[List[Any]] = None,
         timeout: Optional[int] = None,
         delinea_secret_id: Optional[str] = None,
         ssh_username: Optional[str] = None,
@@ -115,6 +116,17 @@ class RunRemoteScriptAction(Action):
         extra_allow = cfg.get("allowed_scripts") or []
 
         exec_timeout = int(timeout) if timeout is not None else 3600
+        normalized_script_args: List[str] = []
+        if script_args is not None:
+            if not isinstance(script_args, list):
+                return False, {
+                    "success": False,
+                    "error": "script_args must be an array/list of values",
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": -1,
+                }
+            normalized_script_args = [str(v) for v in script_args]
 
         explicit_ssh_port: Optional[int] = int(ssh_port) if ssh_port is not None else None
 
@@ -255,7 +267,10 @@ class RunRemoteScriptAction(Action):
                     "hostfile_path": hf_path_stripped if use_hostfile else None,
                 }
 
+            arg_tail = " ".join(shlex.quote(a) for a in normalized_script_args)
             run_cmd = f"/bin/bash {quoted_remote}"
+            if arg_tail:
+                run_cmd = f"{run_cmd} {arg_tail}"
             run_res = ssh.execute(run_cmd)
             ok = run_res.exit_code == 0
             body = {

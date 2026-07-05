@@ -9,6 +9,7 @@ input:
   - target_host
   - hostfile_path
   - host_entry
+  - script_args
   - delinea_secret_id
   - timeout
 tasks:
@@ -27,6 +28,7 @@ tasks:
       target_host: <% ctx().target_host %>
       hostfile_path: <% ctx().hostfile_path %>
       host_entry: <% ctx().host_entry %>
+      script_args: <% ctx().script_args %>
       timeout: <% coalesce(ctx().timeout, 3600) %>
       ssh_username: <% task(retrieve_credentials).result.result.ssh_username %>
       ssh_password: <% task(retrieve_credentials).result.result.ssh_password %>
