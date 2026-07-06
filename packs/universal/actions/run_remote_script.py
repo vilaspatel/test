@@ -110,6 +110,8 @@ class RunRemoteScriptAction(Action):
     ) -> Tuple[bool, Dict[str, Any]]:
         cfg = self.config or {}
         github_token = (cfg.get("github_token") or "").strip() or None
+        cfg_ssh_username = (cfg.get("ssh_username") or "").strip() or None
+        cfg_ssh_private_key = cfg.get("ssh_private_key") or None
         clone_timeout = int(cfg.get("git_clone_timeout") or 600)
         default_port = int(cfg.get("ssh_port") or 22)
         delinea_timeout = int(cfg.get("delinea_request_timeout") or 60)
@@ -161,20 +163,22 @@ class RunRemoteScriptAction(Action):
             elif delinea_secret_id:
                 username, password, private_key = self._fetch_from_delinea(delinea_secret_id, delinea_timeout)
             else:
-                return False, {
-                    "success": False,
-                    "error": "Provide delinea_secret_id or ssh_username with ssh_password or ssh_private_key",
-                    "stdout": "",
-                    "stderr": "",
-                    "exit_code": -1,
-                }
+                # Final fallback from pack config to avoid passing key each execution.
+                username = username or cfg_ssh_username
+                private_key = private_key or cfg_ssh_private_key
         except DelineaError as exc:
             return False, {"success": False, "error": str(exc), "stdout": "", "stderr": "", "exit_code": -1}
 
         if not username:
             return False, {"success": False, "error": "SSH username is missing", "stdout": "", "stderr": "", "exit_code": -1}
         if not password and not private_key:
-            return False, {"success": False, "error": "Neither SSH password nor private key available", "stdout": "", "stderr": "", "exit_code": -1}
+            return False, {
+                "success": False,
+                "error": "Neither SSH password nor private key available (input, Delinea, or pack config)",
+                "stdout": "",
+                "stderr": "",
+                "exit_code": -1,
+            }
 
         # Normalize empty strings to None for Paramiko
         if password == "":

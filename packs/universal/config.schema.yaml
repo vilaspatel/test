@@ -22,6 +22,18 @@ github_token:
   type: string
   secret: true
   required: false
+ssh_username:
+  description: >
+    Optional default SSH username used when actions do not receive ssh_username input.
+  type: string
+  required: false
+ssh_private_key:
+  description: >
+    Optional default PEM SSH private key used when actions do not receive ssh_private_key.
+    Recommended to reference encrypted datastore key ({{st2kv.system.<key>}}).
+  type: string
+  secret: true
+  required: false
 allowed_scripts:
   description: >
     Optional allowlist of script basenames (e.g. ["deploy.sh", "patch.sh"]).

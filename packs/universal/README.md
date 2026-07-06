@@ -58,6 +58,8 @@ azure_key_vault_url: "https://my-vault.vault.azure.net"
 
 # Git + SSH defaults
 github_token: ""
+ssh_username: "ec2-user"
+ssh_private_key: "{{st2kv.system.universal_ssh_private_key}}"
 allowed_scripts: []
 ssh_port: 22
 git_clone_timeout: 600
@@ -76,6 +78,7 @@ Key parameters:
 - `github_repo`, `github_branch`, `script_path`
 - target selection: `target_host` OR (`hostfile_path` + `host_entry`)
 - credentials: `delinea_secret_id` OR (`ssh_username` + `ssh_password|ssh_private_key`)
+- fallback: if not provided, `ssh_username` / `ssh_private_key` are read from pack config
 - `script_args` (new): ordered list of script parameters
 
 Example:
@@ -97,6 +100,7 @@ Runs a repo-hosted Ansible playbook with a repo-hosted inventory.
 Key parameters:
 - `github_repo`, `github_branch`, `playbook_path`, `inventory_path`
 - optional SSH overrides: `ssh_username`, `ssh_private_key`, `ssh_port`
+- fallback: if not provided, `ssh_username` / `ssh_private_key` are read from pack config
 - scale control: `forks` (maps to `ansible-playbook --forks`)
 - Ansible options: `extra_vars`, `limit`, `tags`, `skip_tags`, `check_mode`, `diff_mode`
 

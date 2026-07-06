@@ -41,6 +41,28 @@ def _normalize_str_list(name: str, value: Optional[List[Any]]) -> List[str]:
     return [str(v) for v in value if str(v).strip()]
 
 
+def _normalize_private_key_text(value: Optional[str]) -> Optional[str]:
+    """
+    Normalize key text for OpenSSH file loading.
+
+    Handles common storage patterns:
+    - escaped newlines ("\\n")
+    - CRLF line endings
+    - accidental wrapping quotes
+    """
+    if value is None:
+        return None
+    key = str(value).strip()
+    if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
+        key = key[1:-1]
+    if "\\n" in key and "\n" not in key:
+        key = key.replace("\\n", "\n")
+    key = key.replace("\r\n", "\n").replace("\r", "\n")
+    if key and not key.endswith("\n"):
+        key += "\n"
+    return key or None
+
+
 class RunAnsiblePlaybookAction(Action):
     """Run ansible-playbook against a Git-hosted playbook and inventory file."""
 
@@ -65,8 +87,12 @@ class RunAnsiblePlaybookAction(Action):
     ) -> Tuple[bool, Dict[str, Any]]:
         cfg = self.config or {}
         github_token = (cfg.get("github_token") or "").strip() or None
+        cfg_ssh_username = (cfg.get("ssh_username") or "").strip() or None
+        cfg_ssh_private_key = cfg.get("ssh_private_key") or None
         clone_timeout = int(cfg.get("git_clone_timeout") or 600)
         exec_timeout = int(timeout) if timeout is not None else 3600
+        resolved_ssh_username = ssh_username or cfg_ssh_username
+        resolved_ssh_private_key = _normalize_private_key_text(ssh_private_key or cfg_ssh_private_key)
 
         try:
             _validate_repo_relative_path("playbook_path", playbook_path, PLAYBOOK_SUFFIXES)
@@ -94,12 +120,12 @@ class RunAnsiblePlaybookAction(Action):
                 str(playbook_file),
             ]
 
-            if ssh_username:
-                cmd.extend(["-u", ssh_username])
+            if resolved_ssh_username:
+                cmd.extend(["-u", resolved_ssh_username])
 
-            if ssh_private_key and str(ssh_private_key).strip():
+            if resolved_ssh_private_key and str(resolved_ssh_private_key).strip():
                 with tempfile.NamedTemporaryFile(mode="w", prefix="st2_ssh_key_", delete=False) as handle:
-                    handle.write(ssh_private_key)
+                    handle.write(resolved_ssh_private_key)
                     key_file = handle.name
                 Path(key_file).chmod(0o600)
                 cmd.extend(["--private-key", key_file])
