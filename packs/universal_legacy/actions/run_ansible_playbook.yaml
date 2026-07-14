@@ -1,0 +1,98 @@
+---
+name: run_ansible_playbook
+description: >
+  Clone a GitHub repository, load an Ansible playbook and inventory file from
+  that repo, and execute ansible-playbook with optional SSH key + extra args.
+runner_type: python-script
+enabled: true
+entry_point: run_ansible_playbook.py
+parameters:
+  github_repo:
+    type: string
+    description: Git clone URL for the repository containing the playbook and inventory.
+    required: true
+  github_branch:
+    type: string
+    description: Branch or tag to shallow-clone.
+    required: true
+  playbook_path:
+    type: string
+    description: Repository-relative path to the playbook file (.yml/.yaml).
+    required: true
+  inventory_path:
+    type: string
+    description: Repository-relative path to inventory (.ini/.yml/.yaml/.json).
+    required: true
+  ssh_username:
+    type: string
+    description: Optional SSH username override for Ansible (-u).
+    required: false
+  ssh_private_key:
+    type: string
+    description: Optional PEM private key content; saved to temp file for --private-key.
+    required: false
+    secret: true
+  ssh_port:
+    type: integer
+    description: Optional SSH port override (passed as ansible_port extra var).
+    required: false
+  forks:
+    type: integer
+    description: >
+      Optional Ansible worker process count (--forks). Increase for large host fleets.
+    required: false
+  extra_vars:
+    type: string
+    description: >
+      Optional Ansible --extra-vars payload (JSON/YAML string).
+      Example: '{"app_version":"1.2.3"}'
+    required: false
+  limit:
+    type: string
+    description: Optional Ansible --limit selector.
+    required: false
+  tags:
+    type: array
+    description: Optional list of tags for --tags.
+    required: false
+    default: []
+    items:
+      type: string
+  skip_tags:
+    type: array
+    description: Optional list of tags for --skip-tags.
+    required: false
+    default: []
+    items:
+      type: string
+  check_mode:
+    type: boolean
+    description: Run ansible-playbook in --check mode.
+    required: false
+    default: false
+  diff_mode:
+    type: boolean
+    description: Run ansible-playbook with --diff.
+    required: false
+    default: false
+  disable_host_key_checking:
+    type: boolean
+    description: Disable host key checking by setting ANSIBLE_HOST_KEY_CHECKING=False.
+    required: false
+    default: false
+  timeout:
+    type: integer
+    description: Timeout in seconds for ansible-playbook execution.
+    required: false
+    default: 3600
+output_schema:
+  type: object
+  properties:
+    success: { type: boolean }
+    stdout: { type: string }
+    stderr: { type: string }
+    exit_code: { type: integer }
+    playbook_path: { type: string }
+    inventory_path: { type: string }
+    forks: { type: integer }
+    error: { type: string }

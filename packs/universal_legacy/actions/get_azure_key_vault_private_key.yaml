@@ -1,0 +1,23 @@
+---
+name: get_azure_key_vault_private_key
+description: >
+  Retrieve an SSH private key value from Azure Key Vault using Azure AD
+  client credentials or managed identity configured in the pack.
+runner_type: python-script
+enabled: true
+entry_point: get_azure_key_vault_private_key.py
+parameters:
+  secret_name:
+    type: string
+    description: Name of the Key Vault secret storing the private key PEM.
+    required: true
+  secret_version:
+    type: string
+    description: Optional specific Key Vault secret version.
+    required: false
+output_schema:
+  type: object
+  properties:
+    success: { type: boolean }
+    ssh_private_key: { type: string }
+    error: { type: string }

@@ -5,6 +5,12 @@
   gather_facts: true
 
   vars:
+    # Let Ansible auto-discover the right Python per host over an SSH raw probe:
+    #   RHEL 7 -> /usr/bin/python (2.7)   RHEL 8 -> platform-python (3.6)
+    #   RHEL 9 -> python3 (3.9)           RHEL 10 -> python3 (3.12)
+    # No hard >= 3.8 gate, so 7/8 no longer fail interpreter discovery.
+    ansible_python_interpreter: auto_silent
+
     # Where to store backups on each managed host
     backup_root: "/var/log/ansible_patching"
 
@@ -44,6 +50,7 @@
         path: "{{ host_log }}"
         line: "{{ ansible_date_time.iso8601 }} START patching run on {{ inventory_hostname }} (RHEL {{ ansible_facts.distribution_major_version }})"
         insertafter: EOF
+        create: true
 
     ###########################################################################
     # 2) Backup df -khP and rpm -qa outputs (BEFORE patching)
@@ -110,6 +117,7 @@
             path: "{{ host_log }}"
             line: "{{ ansible_date_time.iso8601 }} PATCH completed. changed={{ patch_result.changed | default('n/a') }}"
             insertafter: EOF
+            create: true
 
       rescue:
         - name: Log - patch failed
@@ -117,6 +125,7 @@
             path: "{{ host_log }}"
             line: "{{ ansible_date_time.iso8601 }} ERROR patching failed: {{ ansible_failed_result.msg | default(ansible_failed_result) }}"
             insertafter: EOF
+            create: true
 
         - name: Fail play due to patch error
           ansible.builtin.fail:
@@ -130,6 +139,7 @@
         path: "{{ host_log }}"
         line: "{{ ansible_date_time.iso8601 }} REBOOT initiated"
         insertafter: EOF
+        create: true
 
     - name: Reboot host and wait
       ansible.builtin.reboot:
@@ -144,6 +154,7 @@
         path: "{{ host_log }}"
         line: "{{ ansible_date_time.iso8601 }} REBOOT completed in {{ reboot_result.elapsed }}s"
         insertafter: EOF
+        create: true
 
     ###########################################################################
     # 5) Capture df -khP output (AFTER reboot) and compare mountpoints
@@ -183,6 +194,7 @@
         path: "{{ host_log }}"
         line: "{{ ansible_date_time.iso8601 }} CHECK mounts: pre={{ mounts_pre | length }}, post={{ mounts_post | length }}, missing={{ missing_mounts | length }}"
         insertafter: EOF
+        create: true
 
     ###########################################################################
     # 6) If mountpoints are missing, mount them from /etc/fstab
@@ -214,23 +226,23 @@
         path: "{{ host_log }}"
         line: "{{ ansible_date_time.iso8601 }} Missing mounts in fstab: {{ missing_mounts_in_fstab | join(', ') if (missing_mounts_in_fstab|length>0) else 'none' }}"
         insertafter: EOF
+        create: true
 
     # Attempt to mount only the missing mountpoints that appear in fstab
     - name: Mount missing filesystems from /etc/fstab
       block:
         - name: Ensure missing mountpoints are mounted (from fstab)
-          mount:
-            path: "{{ item }}"
-            state: mounted
-            fstab: /etc/fstab
+          ansible.builtin.command: "mount {{ item }}"
           loop: "{{ missing_mounts_in_fstab }}"
           register: mount_fix_results
+          changed_when: true
 
         - name: Log - mount fixes attempted
           ansible.builtin.lineinfile:
             path: "{{ host_log }}"
             line: "{{ ansible_date_time.iso8601 }} Mount fix attempted for: {{ missing_mounts_in_fstab | join(', ') }}"
             insertafter: EOF
+            create: true
 
       when: missing_mounts_in_fstab | length > 0
 
@@ -240,6 +252,7 @@
             path: "{{ host_log }}"
             line: "{{ ansible_date_time.iso8601 }} ERROR mounting missing filesystem(s): {{ ansible_failed_result.msg | default(ansible_failed_result) }}"
             insertafter: EOF
+            create: true
 
     ###########################################################################
     # 7) Re-check df after mounting attempts and log final status
@@ -265,6 +278,7 @@
         path: "{{ host_log }}"
         line: "{{ ansible_date_time.iso8601 }} FINAL mounts missing (if any): {{ still_missing_mounts | join(', ') if (still_missing_mounts|length>0) else 'none' }}"
         insertafter: EOF
+        create: true
 
     - name: Fail if critical mounts are still missing
       ansible.builtin.fail:
@@ -276,3 +290,4 @@
         path: "{{ host_log }}"
         line: "{{ ansible_date_time.iso8601 }} SUCCESS patching run completed"
         insertafter: EOF
+        create: true

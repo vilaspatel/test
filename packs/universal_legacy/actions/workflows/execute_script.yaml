@@ -1,0 +1,74 @@
+version: 1.0
+description: >
+  Retrieve SSH credentials from Delinea Secret Server or Azure Key Vault, then
+  clone a GitHub repository and execute a validated bash script on one target host.
+input:
+  - github_repo
+  - github_branch
+  - script_path
+  - target_host
+  - hostfile_path
+  - host_entry
+  - script_args
+  - secret_source
+  - delinea_secret_id
+  - key_vault_secret_name
+  - key_vault_secret_version
+  - ssh_username
+  - timeout
+tasks:
+  choose_secret_source:
+    action: core.noop
+    next:
+      - when: <% ctx().secret_source = "key_vault" %>
+        do:
+          - retrieve_key_vault_private_key
+      - when: <% ctx().secret_source != "key_vault" %>
+        do:
+          - retrieve_delinea_credentials
+
+  retrieve_delinea_credentials:
+    action: universal.get_delinea_secret
+    input:
+      secret_id: <% ctx().delinea_secret_id %>
+    next:
+      - run_remote_delinea
+
+  retrieve_key_vault_private_key:
+    action: universal.get_azure_key_vault_private_key
+    input:
+      secret_name: <% ctx().key_vault_secret_name %>
+      secret_version: <% ctx().key_vault_secret_version %>
+    next:
+      - run_remote_key_vault
+
+  run_remote_delinea:
+    action: universal.run_remote_script
+    input:
+      github_repo: <% ctx().github_repo %>
+      github_branch: <% ctx().github_branch %>
+      script_path: <% ctx().script_path %>
+      target_host: <% ctx().target_host %>
+      hostfile_path: <% ctx().hostfile_path %>
+      host_entry: <% ctx().host_entry %>
+      script_args: <% ctx().script_args %>
+      timeout: <% coalesce(ctx().timeout, 3600) %>
+      ssh_username: <% task(retrieve_delinea_credentials).result.result.ssh_username %>
+      ssh_password: <% task(retrieve_delinea_credentials).result.result.ssh_password %>
+      ssh_private_key: <% task(retrieve_delinea_credentials).result.result.ssh_private_key %>
+
+  run_remote_key_vault:
+    action: universal.run_remote_script
+    input:
+      github_repo: <% ctx().github_repo %>
+      github_branch: <% ctx().github_branch %>
+      script_path: <% ctx().script_path %>
+      target_host: <% ctx().target_host %>
+      hostfile_path: <% ctx().hostfile_path %>
+      host_entry: <% ctx().host_entry %>
+      script_args: <% ctx().script_args %>
+      timeout: <% coalesce(ctx().timeout, 3600) %>
+      ssh_username: <% ctx().ssh_username %>
+      ssh_private_key: <% task(retrieve_key_vault_private_key).result.result.ssh_private_key %>
+output:
+  - execution_result: <% coalesce(task(run_remote_delinea).result.result, task(run_remote_key_vault).result.result) %>

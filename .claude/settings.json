@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import yaml,sys; list\\(yaml.safe_load_all\\(open\\('patch_rhel_with_fs_check-with-module.yaml'\\)\\)\\); print\\('YAML OK'\\)\")",
+      "Bash(command -v ansible-playbook)",
+      "Bash(ansible-playbook --syntax-check patch_rhel_with_fs_check-with-module.yaml)"
+    ]
+  }
+}

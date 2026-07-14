@@ -1,0 +1,110 @@
+---
+delinea_url:
+  description: >
+    Base URL for Delinea Secret Server (e.g. https://tenant.secretservercloud.com).
+    Optional if you only use inline SSH credentials (ssh_username / ssh_password / key)
+    and never call get_delinea_secret or delinea_secret_id on run_remote_script.
+  type: string
+  required: false
+delinea_client_id:
+  description: OAuth2 client ID for Delinea API (client credentials). Required when using Delinea.
+  type: string
+  required: false
+delinea_client_secret:
+  description: OAuth2 client secret for Delinea API. Required when using Delinea.
+  type: string
+  secret: true
+  required: false
+github_token:
+  description: >
+    Optional GitHub personal access token for cloning private repositories.
+    Store via StackStorm datastore or encrypted config.
+  type: string
+  secret: true
+  required: false
+ssh_username:
+  description: >
+    Optional default SSH username used when actions do not receive ssh_username input.
+  type: string
+  required: false
+ssh_private_key:
+  description: >
+    Optional default PEM SSH private key used when actions do not receive ssh_private_key.
+    Recommended to reference encrypted datastore key ({{st2kv.system.<key>}}).
+  type: string
+  secret: true
+  required: false
+allowed_scripts:
+  description: >
+    Optional allowlist of script basenames (e.g. ["deploy.sh", "patch.sh"]).
+    When non-empty, only listed scripts may run. When empty, only path/extension
+    validation applies.
+  type: array
+  items:
+    type: string
+  required: false
+  default: []
+ssh_port:
+  description: SSH port on target hosts when not overridden per execution.
+  type: integer
+  required: false
+  default: 22
+git_clone_timeout:
+  description: Default timeout in seconds for git clone operations.
+  type: integer
+  required: false
+  default: 600
+delinea_request_timeout:
+  description: HTTP timeout in seconds for Delinea API calls.
+  type: integer
+  required: false
+  default: 60
+azure_tenant_id:
+  description: Azure AD tenant ID for Key Vault client credentials flow.
+  type: string
+  required: false
+azure_client_id:
+  description: Azure AD application (client) ID for Key Vault access.
+  type: string
+  required: false
+azure_client_secret:
+  description: Azure AD client secret for Key Vault access.
+  type: string
+  secret: true
+  required: false
+azure_key_vault_url:
+  description: >
+    Base vault URL, for example https://my-vault-name.vault.azure.net.
+  type: string
+  required: false
+azure_auth_mode:
+  description: >
+    Azure Key Vault auth mode: client_credentials or managed_identity.
+    Use managed_identity on Azure VMs/VMSS with assigned identity.
+  type: string
+  required: false
+  default: client_credentials
+azure_managed_identity_client_id:
+  description: >
+    Optional user-assigned managed identity client ID. Leave empty for system-assigned identity.
+  type: string
+  required: false
+azure_request_timeout:
+  description: HTTP timeout in seconds for Azure AD and Key Vault API calls.
+  type: integer
+  required: false
+  default: 60
+ssh_known_hosts_path:
+  description: >
+    Optional known_hosts file to load and to persist new host keys into (same path).
+    When unset, ~/.ssh/known_hosts is used for both load (with system keys) and save.
+  type: string
+  required: false
+ssh_strict_host_key_checking:
+  description: >
+    When false (default), unknown SSH host keys are accepted on first connect and saved
+    under ~/.ssh/known_hosts (or ssh_known_hosts_path). When true, require the host key
+    to exist already (RejectPolicy); use for hardened environments with pre-seeded keys.
+  type: boolean
+  required: false
+  default: false

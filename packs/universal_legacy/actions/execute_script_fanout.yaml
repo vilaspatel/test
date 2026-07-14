@@ -1,0 +1,81 @@
+---
+name: execute_script_fanout
+description: >
+  Workflow: retrieve SSH credentials from Delinea Secret Server or Azure Key
+  Vault, then execute the same Git-hosted bash script across many target hosts.
+runner_type: orquesta
+enabled: true
+entry_point: workflows/execute_script_fanout.yaml
+parameters:
+  github_repo:
+    type: string
+    required: true
+  github_branch:
+    type: string
+    required: true
+  script_path:
+    type: string
+    required: true
+  target_hosts:
+    type: array
+    description: List of hostnames/IPs to execute against.
+    required: true
+    items:
+      type: string
+  script_args:
+    type: array
+    description: Optional positional arguments passed to the script.
+    required: false
+    default: []
+    items:
+      type: string
+  secret_source:
+    type: string
+    description: "Credential source: delinea (default) or key_vault."
+    required: false
+    default: delinea
+  delinea_secret_id:
+    type: string
+    required: false
+  key_vault_secret_name:
+    type: string
+    required: false
+  key_vault_secret_version:
+    type: string
+    required: false
+  ssh_username:
+    type: string
+    description: "Required when secret_source is key_vault."
+    required: false
+  per_host_timeout:
+    type: integer
+    description: Timeout in seconds applied to each host execution.
+    required: false
+    default: 3600
+  concurrency:
+    type: integer
+    description: Maximum in-flight hosts at a time.
+    required: false
+    default: 25
+  batch_size:
+    type: integer
+    description: Alias for concurrency window size (used when concurrency is omitted).
+    required: false
+  retries:
+    type: integer
+    description: Retries for failed host executions.
+    required: false
+    default: 0
+  retry_delay:
+    type: integer
+    description: Delay in seconds between retry attempts.
+    required: false
+    default: 10
+  ssh_port:
+    type: integer
+    required: false
+output_schema:
+  type: object
+  properties:
+    fanout_result:
+      type: object
