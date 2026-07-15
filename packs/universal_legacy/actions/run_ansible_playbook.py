@@ -106,6 +106,7 @@ class RunAnsiblePlaybookAction(Action):
             return False, {"success": False, "error": str(exc), "stdout": "", "stderr": "", "exit_code": -1}
 
         key_file: Optional[str] = None
+        key_files: List[str] = []
         tmp_git_parent: Optional[Path] = None
         try:
             gh = GitHubClient(github_token=github_token, clone_timeout=clone_timeout)
@@ -129,6 +130,19 @@ class RunAnsiblePlaybookAction(Action):
                     key_file = handle.name
                 Path(key_file).chmod(0o600)
                 cmd.extend(["--private-key", key_file])
+
+            # Per-domain keys from pack config -> temp files -> exposed as extra-vars.
+            # Inventory selects per host, e.g. in [rhel:vars]:
+            #   ansible_ssh_private_key_file={{ anixter_key if 'anixter.com' in ansible_host else wesco_key }}
+            for name in ("anixter", "wesco"):
+                key_txt = _normalize_private_key_text(cfg.get(f"{name}_ssh_private_key"))
+                if key_txt:
+                    with tempfile.NamedTemporaryFile(mode="w", prefix=f"st2_{name}_key_", delete=False) as handle:
+                        handle.write(key_txt)
+                        path = handle.name
+                    Path(path).chmod(0o600)
+                    key_files.append(path)
+                    cmd.extend(["--extra-vars", f"{name}_key={path}"])
 
             if ssh_port is not None:
                 cmd.extend(["--extra-vars", f"ansible_port={int(ssh_port)}"])
@@ -200,10 +214,11 @@ class RunAnsiblePlaybookAction(Action):
         except Exception as exc:  # noqa: BLE001
             return False, {"success": False, "error": str(exc), "stdout": "", "stderr": "", "exit_code": -1}
         finally:
-            if key_file:
-                try:
-                    Path(key_file).unlink(missing_ok=True)
-                except Exception:
-                    pass
+            for path in [key_file, *key_files]:
+                if path:
+                    try:
+                        Path(path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
             if tmp_git_parent is not None:
                 shutil.rmtree(tmp_git_parent, ignore_errors=True)

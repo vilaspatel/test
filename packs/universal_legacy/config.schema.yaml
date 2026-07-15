@@ -34,6 +34,20 @@ ssh_private_key:
   type: string
   secret: true
   required: false
+anixter_ssh_private_key:
+  description: >
+    PEM SSH private key for anixter.com hosts. Written to a temp file and exposed
+    to the playbook as the `anixter_key` var for per-host key selection.
+  type: string
+  secret: true
+  required: false
+wesco_ssh_private_key:
+  description: >
+    PEM SSH private key for wescodist.com hosts. Written to a temp file and exposed
+    to the playbook as the `wesco_key` var for per-host key selection.
+  type: string
+  secret: true
+  required: false
 allowed_scripts:
   description: >
     Optional allowlist of script basenames (e.g. ["deploy.sh", "patch.sh"]).
