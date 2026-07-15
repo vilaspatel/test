@@ -32,6 +32,20 @@ parameters:
     description: Optional PEM private key content; saved to temp file for --private-key.
     required: false
     secret: true
+  anixter_ssh_private_key:
+    type: string
+    description: >
+      Optional PEM key for anixter.com hosts. Overrides pack config. Exposed to the
+      playbook as the `anixter_key` var for per-host key selection.
+    required: false
+    secret: true
+  wesco_ssh_private_key:
+    type: string
+    description: >
+      Optional PEM key for wescodist.com hosts. Overrides pack config. Exposed to the
+      playbook as the `wesco_key` var for per-host key selection.
+    required: false
+    secret: true
   ssh_port:
     type: integer
     description: Optional SSH port override (passed as ansible_port extra var).

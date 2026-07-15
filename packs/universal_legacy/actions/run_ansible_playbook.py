@@ -74,6 +74,8 @@ class RunAnsiblePlaybookAction(Action):
         inventory_path: str,
         ssh_username: Optional[str] = None,
         ssh_private_key: Optional[str] = None,
+        anixter_ssh_private_key: Optional[str] = None,
+        wesco_ssh_private_key: Optional[str] = None,
         ssh_port: Optional[int] = None,
         forks: Optional[int] = None,
         extra_vars: Optional[Any] = None,
@@ -134,8 +136,12 @@ class RunAnsiblePlaybookAction(Action):
             # Per-domain keys from pack config -> temp files -> exposed as extra-vars.
             # Inventory selects per host, e.g. in [rhel:vars]:
             #   ansible_ssh_private_key_file={{ anixter_key if 'anixter.com' in ansible_host else wesco_key }}
-            for name in ("anixter", "wesco"):
-                key_txt = _normalize_private_key_text(cfg.get(f"{name}_ssh_private_key"))
+            domain_keys = {
+                "anixter": anixter_ssh_private_key or cfg.get("anixter_ssh_private_key"),
+                "wesco": wesco_ssh_private_key or cfg.get("wesco_ssh_private_key"),
+            }
+            for name, raw_key in domain_keys.items():
+                key_txt = _normalize_private_key_text(raw_key)
                 if key_txt:
                     with tempfile.NamedTemporaryFile(mode="w", prefix=f"st2_{name}_key_", delete=False) as handle:
                         handle.write(key_txt)
