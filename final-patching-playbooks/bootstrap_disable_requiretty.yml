@@ -1,0 +1,28 @@
+###############################################################################
+# One-time bootstrap: disable `requiretty` for sysadmin so Ansible become works.
+# Runs `sudo` over a FORCED ssh TTY (raw), because requiretty blocks the normal
+# non-tty become. Pass forced-tty + ssh-rsa via extra_vars (see below).
+###############################################################################
+- name: Disable requiretty for sysadmin
+  hosts: all
+  gather_facts: false
+  become: false
+  ignore_unreachable: true
+
+  tasks:
+    - name: Drop in a validated !requiretty rule for sysadmin
+      ansible.builtin.raw: |
+        sudo bash -c '
+          f=/etc/sudoers.d/99-notty
+          echo "Defaults:sysadmin !requiretty" > "$f.tmp" &&
+          visudo -cf "$f.tmp" &&
+          install -m 440 "$f.tmp" "$f" &&
+          rm -f "$f.tmp" &&
+          echo "OK requiretty disabled on $(hostname)"
+        '
+      register: notty_result
+      changed_when: "'OK requiretty disabled' in notty_result.stdout"
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} => {{ notty_result.stdout | default(notty_result) | trim }}"
