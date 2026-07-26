@@ -1,47 +1,41 @@
----
 ###############################################################################
-# Part 1: Pre-Patching Backup with Error Handling and Email Reporting
+# Linux Pre-Patching Backup and Validation
+# Production fixed version for Ansible Core 2.13 and RHEL 7 / RHEL 8 / RHEL 9
 ###############################################################################
 
 - name: Pre-Patching Backup and Validation
   hosts: all
-
   remote_user: sysadmin
   become: true
   become_method: sudo
   become_user: root
-
   gather_facts: true
   ignore_unreachable: true
 
   vars:
     backup_root: "/var/log/ansible_patching"
-
-    mail_to: "wesco-linux@wescodist.com"
-    mail_from: "ansible-precheck@wescodist.com"
-    smtp_host: "localhost"
+    ansible_python_interpreter: auto_silent
 
   tasks:
-
     ###########################################################################
-    # Initialize status
+    # Initialize host status
     ###########################################################################
     - name: Initialize precheck status
       ansible.builtin.set_fact:
         precheck_status: "SUCCESS"
         precheck_failed_task: "none"
         precheck_failed_msg: "none"
+        precheck_failure_category: "none"
         precheck_backup_dir: "not_created"
         precheck_host_log: "not_created"
 
     ###########################################################################
-    # Precheck and backup block
+    # Precheck and backup workflow
     ###########################################################################
     - name: Precheck backup workflow
       block:
-
         #######################################################################
-        # Do not depend on ansible_date_time because gather_facts can fail
+        # Timestamp and log paths
         #######################################################################
         - name: Create timestamp for this run
           ansible.builtin.set_fact:
@@ -56,17 +50,25 @@
             precheck_host_log: "{{ precheck_backup_dir }}/precheck.log"
 
         #######################################################################
-        # Verify sudo/root access
+        # Verify sudo/root access - fixed to avoid sudo_test.stdout errors
         #######################################################################
         - name: Verify sysadmin sudo to root
           ansible.builtin.command: id
           register: sudo_test
           changed_when: false
+          ignore_errors: true
 
         - name: Fail if effective user is not root
           ansible.builtin.fail:
-            msg: "Connected as sysadmin but sudo to root failed. Current user details: {{ sudo_test.stdout }}"
-          when: "'uid=0(root)' not in sudo_test.stdout"
+            msg: >-
+              Connected as sysadmin but sudo to root failed.
+              stdout={{ sudo_test.stdout | default('N/A') }};
+              stderr={{ sudo_test.stderr | default('N/A') }};
+              rc={{ sudo_test.rc | default('N/A') }};
+              msg={{ sudo_test.msg | default('N/A') }}
+          when: >-
+            (sudo_test.rc | default(1)) != 0 or
+            (sudo_test.stdout | default('') is not match('uid=0\('))
 
         #######################################################################
         # Create backup directory and log file safely
@@ -212,12 +214,23 @@
             precheck_status: "SUCCESS"
             precheck_failed_task: "none"
             precheck_failed_msg: "none"
+            precheck_failure_category: "none"
 
       rescue:
-
         #######################################################################
         # Capture failure details
         #######################################################################
+        - name: Identify failure category
+          ansible.builtin.set_fact:
+            precheck_failure_category: >-
+              {% set failure_text = (ansible_failed_result.msg | default('') ~ ' ' ~ ansible_failed_result.stderr | default('') ~ ' ' ~ ansible_failed_result.stdout | default('')) | lower %}
+              {% if 'missing sudo password' in failure_text %}MISSING_SUDO_PASSWORD
+              {% elif 'permission denied' in failure_text or 'publickey' in failure_text %}SSH_AUTHENTICATION_FAILED
+              {% elif 'sudo' in failure_text or 'become' in failure_text or 'root' in failure_text %}SUDO_ESCALATION_FAILED
+              {% elif 'unreachable' in failure_text or 'connection' in failure_text %}HOST_UNREACHABLE
+              {% else %}GENERAL_FAILURE
+              {% endif %}
+
         - name: Mark precheck failed and capture failure details
           ansible.builtin.set_fact:
             precheck_status: "FAILED"
@@ -227,11 +240,13 @@
                 ansible_failed_result.msg
                 | default(ansible_failed_result.stderr, true)
                 | default(ansible_failed_result.stdout, true)
+                | default(ansible_failed_result.exception, true)
                 | default(ansible_failed_result, true)
+                | string
               }}
 
         #######################################################################
-        # Attempt to create fallback log location if normal log path failed
+        # Attempt to write failure log
         #######################################################################
         - name: Create fallback failure log directory
           ansible.builtin.file:
@@ -245,7 +260,7 @@
             path: "{{ precheck_host_log if precheck_host_log != 'not_created' else '/tmp/ansible_precheck_failures/' + inventory_hostname + '_precheck_failed.log' }}"
             create: true
             mode: "0644"
-            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} ERROR task='{{ precheck_failed_task }}' failure='{{ precheck_failed_msg }}'"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} ERROR category='{{ precheck_failure_category }}' task='{{ precheck_failed_task }}' failure='{{ precheck_failed_msg }}'"
             insertafter: EOF
           ignore_errors: true
 
@@ -253,20 +268,21 @@
           ansible.builtin.debug:
             msg: >-
               Precheck backup failed on {{ inventory_hostname }}.
+              Category={{ precheck_failure_category }}.
               Failed task={{ precheck_failed_task }}.
               Error={{ precheck_failed_msg }}.
 
     ###########################################################################
-    # Ensure failed host remains available for final report
+    # Display host status
     ###########################################################################
     - name: Display host precheck status
       ansible.builtin.debug:
         msg: >-
           Host={{ inventory_hostname }},
           Status={{ precheck_status | default('UNKNOWN') }},
+          Category={{ precheck_failure_category | default('UNKNOWN') }},
           Backup_Dir={{ precheck_backup_dir | default('not_created') }},
           Log={{ precheck_host_log | default('not_created') }}
-
 
 ###############################################################################
 # Final Reporting Play
@@ -278,12 +294,10 @@
   become: false
 
   vars:
-    mail_to: "wesco-linux@wescodist.com"
+    mail_to: "vilas.j@wescodist.com"
     mail_from: "ansible-precheck@wescodist.com"
-    smtp_host: "localhost"
 
   tasks:
-
     - name: Initialize report variables
       ansible.builtin.set_fact:
         success_hosts: []
@@ -310,6 +324,7 @@
           ------------------------------------------------------------
           Host: {{ item }}
           Status: {{ hostvars[item].precheck_status | default('UNREACHABLE_OR_GATHER_FACTS_FAILED') }}
+          Failure Category: {{ hostvars[item].precheck_failure_category | default('SSH/SUDO/GATHER_FACTS') }}
           Failed Task: {{ hostvars[item].precheck_failed_task | default('SSH/SUDO/GATHER_FACTS') }}
           Failure Message: {{ hostvars[item].precheck_failed_msg | default('SSH connection failed, sudo failed, or gather_facts failed') }}
           Backup Directory: {{ hostvars[item].precheck_backup_dir | default('not_created') }}
@@ -326,57 +341,62 @@
           Total Hosts              : {{ groups['all'] | length }}
           Successful Hosts         : {{ success_hosts | length }}
           Failed/Unreachable Hosts : {{ failed_hosts | length }}
+          Failed Host Names        : {{ failed_hosts | join(', ') if failed_hosts | length > 0 else 'None' }}
 
-          {% if failed_hosts | length == 0 %}
           Overall Status:
           ============================================================
+          {% if failed_hosts | length == 0 %}
           SUCCESS
+          {% else %}
+          FAILED
+          {% endif %}
 
+          {% if failed_hosts | length == 0 %}
           All servers completed the pre-patching backup successfully.
-
-          Validation Completed:
-          ============================================================
-          - SSH communication successful
-          - Login successful as sysadmin
-          - sudo to root successful
-          - Facts gathered successfully
-          - Backup directory created successfully
-          - Log file created successfully
-          - df -khP backup completed successfully
-          - rpm -qa backup completed successfully
-          - Mount list backup completed successfully
+          {% else %}
+          One or more servers failed during pre-patching backup or were unreachable.
+          {% endif %}
 
           Successful Hosts:
           ============================================================
+          {% if success_hosts | length == 0 %}
+          None
+          {% else %}
           {% for host in success_hosts %}
           - {{ host }}
           {% endfor %}
-
-          {% else %}
-          Overall Status:
-          ============================================================
-          FAILED
-
-          One or more servers failed during pre-patching backup or were unreachable.
+          {% endif %}
 
           Failed/Unreachable Hosts:
           ============================================================
+          {% if failed_hosts | length == 0 %}
+          None
+          {% else %}
           {% for host in failed_hosts %}
           - {{ host }}
           {% endfor %}
+          {% endif %}
+
+          Failure Details (host | category | task | message):
+          ============================================================
+          {% if failed_hosts | length == 0 %}
+          None
+          {% else %}
+          {% for host in failed_hosts %}
+          {{ host }} | {{ hostvars[host].precheck_failure_category | default('UNREACHABLE_OR_GATHER_FACTS_FAILED') }} | {{ hostvars[host].precheck_failed_task | default('SSH/SUDO/GATHER_FACTS') }} | {{ hostvars[host].precheck_failed_msg | default('SSH/sudo/gather_facts failed') | regex_replace('[\r\n]+', ' ') | truncate(180) }}
+          {% endfor %}
+          {% endif %}
 
           Detailed Host Report:
           ============================================================
-          {% for line in report_lines %}
-          {{ line }}
-          {% endfor %}
-          {% endif %}
+          {{ report_lines | join('\n') }}
 
           End of Report.
 
     - name: Display final precheck report
       ansible.builtin.debug:
         msg: "{{ final_precheck_report }}"
+
     ###########################################################################
     # Save report locally on Ansible control node
     ###########################################################################
@@ -402,23 +422,22 @@
     - name: Send final precheck backup email report using mailx/mail/sendmail
       ansible.builtin.shell: |
         set -o pipefail
-
         REPORT_FILE="/tmp/linux_precheck_backup_report.txt"
         MAIL_TO="{{ mail_to }}"
         MAIL_FROM="{{ mail_from }}"
         SUBJECT="{{ email_subject | trim }}"
 
         if command -v mailx >/dev/null 2>&1; then
-          mailx -r "${MAIL_FROM}" -s "${SUBJECT}" "${MAIL_TO}" < "${REPORT_FILE}"
+          mailx -r "$MAIL_FROM" -s "$SUBJECT" "$MAIL_TO" < "$REPORT_FILE"
         elif command -v mail >/dev/null 2>&1; then
-          mail -s "${SUBJECT}" "${MAIL_TO}" < "${REPORT_FILE}"
+          mail -s "$SUBJECT" "$MAIL_TO" < "$REPORT_FILE"
         elif command -v sendmail >/dev/null 2>&1; then
           {
-            echo "From: ${MAIL_FROM}"
-            echo "To: ${MAIL_TO}"
-            echo "Subject: ${SUBJECT}"
+            echo "From: $MAIL_FROM"
+            echo "To: $MAIL_TO"
+            echo "Subject: $SUBJECT"
             echo
-            cat "${REPORT_FILE}"
+            cat "$REPORT_FILE"
           } | sendmail -t
         else
           echo "ERROR: No mailx, mail, or sendmail command found on Ansible control node."
