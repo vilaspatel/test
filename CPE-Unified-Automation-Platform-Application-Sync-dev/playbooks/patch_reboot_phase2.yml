@@ -24,7 +24,7 @@
   vars:
     patch_root: "/var/log/ansible_patching"
 
-    mail_to: "wesco-linux@wescodist.com"
+    mail_to: "vilas.j@wescodist.com"
     mail_from: "ansible-patching@wescodist.com"
     smtp_host: "localhost"
 
@@ -557,7 +557,7 @@
   become: false
 
   vars:
-    mail_to: "wesco-linux@wescodist.com"
+    mail_to: "vilas.j@wescodist.com"
     mail_from: "ansible-patching@wescodist.com"
     smtp_host: "localhost"
 

@@ -31,7 +31,7 @@
     ansible_python_interpreter: auto_silent
     validation_root: "/var/log/ansible_patching"
 
-    mail_to: "wesco-linux@wescodist.com"
+    mail_to: "vilas.j@wescodist.com"
     mail_from: "ansible-postcheck@wescodist.com"
 
     ###########################################################################

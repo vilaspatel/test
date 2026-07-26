@@ -26,7 +26,7 @@
     ansible_python_interpreter: auto_silent
     reboot_root: "/var/log/ansible_patching"
 
-    mail_to: "wesco-linux@wescodist.com"
+    mail_to: "vilas.j@wescodist.com"
     mail_from: "ansible-reboot@wescodist.com"
 
     reboot_timeout_seconds: 1800
@@ -507,7 +507,7 @@
   become: false
 
   vars:
-    mail_to: "wesco-linux@wescodist.com"
+    mail_to: "vilas.j@wescodist.com"
     mail_from: "ansible-reboot@wescodist.com"
 
   tasks:
