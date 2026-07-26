@@ -1,0 +1,20 @@
+1. Current reboot logic
+This playbook reboots only if required.
+The check uses:
+needs-restarting -r
+
+if available. If not available, it compares the running kernel with the latest installed kernel.
+If you want to always reboot after patching, change this task:
+- name: Reboot server if required
+  ansible.builtin.reboot:
+From:
+when: patch_reboot_required == "YES"
+To:
+when: true
+Also change this task:
+- name: Mark reboot performed
+From:
+when: patch_reboot_required == "YES"
+To:
+when: true
+

@@ -1,0 +1,9 @@
+2. It patches one server at a time
+I added:
+serial: 1
+
+This is safer for production patching because it patches and reboots one server at a time.
+If you want to patch in batches of 5:
+serial: 5
+
+If you want to patch everything together, remove the serial line.

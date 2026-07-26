@@ -1,0 +1,348 @@
+---
+###############################################################################
+# Phase 3: Linux Post Validation Only - No Reboot
+#
+# Purpose:
+#   - No reboot
+#   - Validate server after patching
+#   - Compare current df/mount output against Phase 1 precheck backup
+#   - Detect missing mounts/filesystems
+#   - Validate SSHD
+#   - Send final success/failure email report
+#
+# Expected Phase 1 files:
+#   /var/log/ansible_patching/<host>/<timestamp>/df_pre.txt
+#   /var/log/ansible_patching/<host>/<timestamp>/mounts_pre.txt
+#   /var/log/ansible_patching/<host>/<timestamp>/rpm_qa_pre.txt
+###############################################################################
+
+- name: Linux Post Validation - DF Mount Comparison - No Reboot
+  hosts: all
+
+  remote_user: sysadmin
+  become: true
+  become_method: sudo
+  become_user: root
+
+  gather_facts: true
+  ignore_unreachable: true
+
+  vars:
+    validation_root: "/var/log/ansible_patching"
+
+    mail_to: "wesco-linux@wescodist.com"
+    mail_from: "ansible-postcheck@wescodist.com"
+
+    ###########################################################################
+    # Optional:
+    # If you want to force a specific Phase 1 precheck directory, set this.
+    #
+    # Example:
+    # precheck_dir_override: "/var/log/ansible_patching/server1/20260713T134457"
+    #
+    # Leave blank to auto-detect latest directory containing df_pre.txt.
+    ###########################################################################
+    precheck_dir_override: ""
+
+  tasks:
+
+    ###########################################################################
+    # Initialize status
+    ###########################################################################
+    - name: Initialize post validation status
+      ansible.builtin.set_fact:
+        postcheck_status: "SUCCESS"
+        postcheck_failed_task: "none"
+        postcheck_failed_msg: "none"
+        postcheck_dir: "not_created"
+        postcheck_log: "not_created"
+        precheck_reference_dir: "not_found"
+        os_major_version: "{{ ansible_facts.distribution_major_version | default('unknown') }}"
+        kernel_current: "unknown"
+        uptime_current: "unknown"
+        sshd_status: "unknown"
+        df_validation_status: "unknown"
+        mount_validation_status: "unknown"
+        filesystem_validation_status: "unknown"
+        rpm_validation_status: "unknown"
+        missing_mounts_detail: "none"
+        missing_filesystems_detail: "none"
+        df_diff_detail: "none"
+        rpm_diff_detail: "none"
+
+    ###########################################################################
+    # Main post validation workflow
+    ###########################################################################
+    - name: Post validation workflow
+      block:
+
+        #######################################################################
+        # Validate supported OS
+        #######################################################################
+        - name: Validate supported RHEL version
+          ansible.builtin.fail:
+            msg: >-
+              Unsupported OS detected.
+              Distribution={{ ansible_facts.distribution | default('unknown') }},
+              Major Version={{ ansible_facts.distribution_major_version | default('unknown') }}.
+              This playbook supports RHEL 6, 7, 8, and 9.
+          when: >
+            ansible_facts.distribution_major_version is not defined or
+            ansible_facts.distribution_major_version | int not in [6, 7, 8, 9]
+
+        #######################################################################
+        # Create timestamp and post validation directory
+        #######################################################################
+        - name: Create post validation timestamp
+          ansible.builtin.set_fact:
+            run_ts: "{{ lookup('pipe', 'date +%Y%m%dT%H%M%S') }}"
+
+        - name: Set post validation directory
+          ansible.builtin.set_fact:
+            postcheck_dir: "{{ validation_root }}/{{ inventory_hostname }}/{{ run_ts }}"
+
+        - name: Set post validation log file
+          ansible.builtin.set_fact:
+            postcheck_log: "{{ postcheck_dir }}/post_validation.log"
+
+        #######################################################################
+        # Verify sudo/root access
+        #######################################################################
+        - name: Verify sysadmin sudo to root
+          ansible.builtin.command: id
+          register: sudo_test
+          changed_when: false
+
+        - name: Fail if effective user is not root
+          ansible.builtin.fail:
+            msg: "Connected as sysadmin but sudo to root failed. Current user details: {{ sudo_test.stdout }}"
+          when: "'uid=0(root)' not in sudo_test.stdout"
+
+        #######################################################################
+        # Create post validation directory and log
+        #######################################################################
+        - name: Create post validation directory
+          ansible.builtin.file:
+            path: "{{ postcheck_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: Create post validation log file
+          ansible.builtin.file:
+            path: "{{ postcheck_log }}"
+            state: touch
+            mode: "0644"
+
+        - name: Log - post validation started
+          ansible.builtin.lineinfile:
+            path: "{{ postcheck_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} START post validation on {{ inventory_hostname }} RHEL {{ os_major_version }}. No reboot performed."
+            insertafter: EOF
+
+        #######################################################################
+        # Locate Phase 1 precheck reference directory
+        #######################################################################
+        - name: Locate latest Phase 1 precheck directory
+          ansible.builtin.shell: |
+            set -o pipefail
+
+            if [ -n "{{ precheck_dir_override }}" ]; then
+              if [ -f "{{ precheck_dir_override }}/df_pre.txt" ] && [ -f "{{ precheck_dir_override }}/mounts_pre.txt" ]; then
+                echo "{{ precheck_dir_override }}"
+                exit 0
+              else
+                echo "ERROR: precheck_dir_override does not contain df_pre.txt and mounts_pre.txt: {{ precheck_dir_override }}"
+                exit 1
+              fi
+            fi
+
+            BASE_DIR="{{ validation_root }}/{{ inventory_hostname }}"
+
+            if [ ! -d "${BASE_DIR}" ]; then
+              echo "ERROR: Host validation root does not exist: ${BASE_DIR}"
+              exit 1
+            fi
+
+            FOUND_DIR=""
+
+            for d in $(ls -1dt "${BASE_DIR}"/* 2>/dev/null); do
+              if [ -f "${d}/df_pre.txt" ] && [ -f "${d}/mounts_pre.txt" ]; then
+                FOUND_DIR="${d}"
+                break
+              fi
+            done
+
+            if [ -n "${FOUND_DIR}" ]; then
+              echo "${FOUND_DIR}"
+              exit 0
+            else
+              echo "ERROR: No Phase 1 precheck directory found under ${BASE_DIR} containing df_pre.txt and mounts_pre.txt"
+              exit 1
+            fi
+          args:
+            executable: /bin/bash
+          register: precheck_dir_cmd
+          changed_when: false
+
+        - name: Set precheck reference directory fact
+          ansible.builtin.set_fact:
+            precheck_reference_dir: "{{ precheck_dir_cmd.stdout | trim }}"
+
+        - name: Log - precheck reference directory selected
+          ansible.builtin.lineinfile:
+            path: "{{ postcheck_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} INFO using precheck reference directory {{ precheck_reference_dir }}"
+            insertafter: EOF
+
+        #######################################################################
+        # Validate required Phase 1 files exist
+        #######################################################################
+        - name: Validate required Phase 1 precheck files exist
+          ansible.builtin.stat:
+            path: "{{ item }}"
+          register: precheck_required_files
+          loop:
+            - "{{ precheck_reference_dir }}/df_pre.txt"
+            - "{{ precheck_reference_dir }}/mounts_pre.txt"
+
+        - name: Fail if required Phase 1 files are missing
+          ansible.builtin.fail:
+            msg: "Required Phase 1 precheck files are missing under {{ precheck_reference_dir }}"
+          when: >
+            precheck_required_files.results
+            | selectattr('stat.exists', 'equalto', false)
+            | list
+            | length > 0
+
+        #######################################################################
+        # Capture current post-patching state
+        #######################################################################
+        - name: Capture current kernel
+          ansible.builtin.command: uname -r
+          register: kernel_current_cmd
+          changed_when: false
+
+        - name: Set current kernel fact
+          ansible.builtin.set_fact:
+            kernel_current: "{{ kernel_current_cmd.stdout | default('unknown') }}"
+
+        - name: Capture current uptime
+          ansible.builtin.command: uptime
+          register: uptime_current_cmd
+          changed_when: false
+
+        - name: Set current uptime fact
+          ansible.builtin.set_fact:
+            uptime_current: "{{ uptime_current_cmd.stdout | default('unknown') }}"
+
+        - name: Capture current df, mounts, filesystems, and rpm list
+          ansible.builtin.shell: |
+            set -o pipefail
+
+            df -khP > "{{ postcheck_dir }}/df_post.txt"
+            df -khP | sort > "{{ postcheck_dir }}/df_post_sorted.txt"
+
+            df -khP | awk 'NR>1 {print $NF}' | sort -u \
+              > "{{ postcheck_dir }}/mounts_post.txt"
+
+            df -khP | awk 'NR>1 {print $1 " " $NF}' | sort -u \
+              > "{{ postcheck_dir }}/filesystems_post.txt"
+
+            rpm -qa | sort > "{{ postcheck_dir }}/rpm_qa_post.txt"
+          args:
+            executable: /bin/bash
+
+        #######################################################################
+        # Prepare normalized Phase 1 comparison files
+        #######################################################################
+        - name: Prepare normalized Phase 1 precheck comparison files
+          ansible.builtin.shell: |
+            set -o pipefail
+
+            sort "{{ precheck_reference_dir }}/df_pre.txt" \
+              > "{{ postcheck_dir }}/df_pre_sorted_reference.txt"
+
+            awk 'NR>1 {print $NF}' "{{ precheck_reference_dir }}/df_pre.txt" | sort -u \
+              > "{{ postcheck_dir }}/mounts_pre_reference.txt"
+
+            awk 'NR>1 {print $1 " " $NF}' "{{ precheck_reference_dir }}/df_pre.txt" | sort -u \
+              > "{{ postcheck_dir }}/filesystems_pre_reference.txt"
+
+            if [ -f "{{ precheck_reference_dir }}/rpm_qa_pre.txt" ]; then
+              cp "{{ precheck_reference_dir }}/rpm_qa_pre.txt" "{{ postcheck_dir }}/rpm_qa_pre_reference.txt"
+            else
+              touch "{{ postcheck_dir }}/rpm_qa_pre_reference.txt"
+            fi
+          args:
+            executable: /bin/bash
+
+        #######################################################################
+        # Compare mount points
+        #######################################################################
+        - name: Compare precheck mounts against current post mounts
+          ansible.builtin.shell: |
+            set -o pipefail
+
+            comm -23 "{{ postcheck_dir }}/mounts_pre_reference.txt" "{{ postcheck_dir }}/mounts_post.txt" \
+              > "{{ postcheck_dir }}/missing_mounts_post.txt" || true
+
+            if [ -s "{{ postcheck_dir }}/missing_mounts_post.txt" ]; then
+              cat "{{ postcheck_dir }}/missing_mounts_post.txt"
+            else
+              echo "none"
+            fi
+          args:
+            executable: /bin/bash
+          register: missing_mounts_cmd
+          changed_when: false
+          failed_when: false
+
+        - name: Set mount validation status
+          ansible.builtin.set_fact:
+            missing_mounts_detail: "{{ missing_mounts_cmd.stdout | default('none', true) | trim }}"
+            mount_validation_status: >-
+              {{
+                'FAILED_MISSING_MOUNTS'
+                if (missing_mounts_cmd.stdout | default('', true) | trim) not in ['', 'none']
+                else 'SUCCESS'
+              }}
+
+        #######################################################################
+        # Compare filesystem + mount mappings
+        #######################################################################
+        - name: Compare precheck filesystem mappings against current post mappings
+          ansible.builtin.shell: |
+            set -o pipefail
+
+            comm -23 "{{ postcheck_dir }}/filesystems_pre_reference.txt" "{{ postcheck_dir }}/filesystems_post.txt" \
+              > "{{ postcheck_dir }}/missing_filesystems_post.txt" || true
+
+            if [ -s "{{ postcheck_dir }}/missing_filesystems_post.txt" ]; then
+              cat "{{ postcheck_dir }}/missing_filesystems_post.txt"
+            else
+              echo "none"
+            fi
+          args:
+            executable: /bin/bash
+          register: missing_filesystems_cmd
+          changed_when: false
+          failed_when: false
+
+        - name: Set filesystem validation status
+          ansible.builtin.set_fact:
+            missing_filesystems_detail: "{{ missing_filesystems_cmd.stdout | default('none', true) | trim }}"
+            filesystem_validation_status: >-
+              {{
+                'FAILED_MISSING_FILESYSTEMS'
+                if (missing_filesystems_cmd.stdout | default('', true) | trim) not in ['', 'none']
+                else 'SUCCESS'
+              }}
+
+        #######################################################################
+        # Compare full df output
+        #
+        # Note:

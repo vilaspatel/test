@@ -1,0 +1,278 @@
+---
+- name: Backup df/rpm, patch RHEL (7/8/9/10), reboot, validate mounts, auto-mount from fstab
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    # Where to store backups on each managed host
+    backup_root: "/var/log/ansible_patching"
+
+    # Reboot timeout (seconds)
+    reboot_timeout: 1800
+
+    # How long to wait before starting reboot checks
+    reboot_pre_delay: 10
+    reboot_post_delay: 20
+
+  tasks:
+    ###########################################################################
+    # 1) Prepare backup/log directories and files
+    ###########################################################################
+    - name: Create timestamp for this run
+      ansible.builtin.set_fact:
+        run_ts: "{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Create host backup directory
+      ansible.builtin.file:
+        path: "{{ backup_root }}/{{ inventory_hostname }}/{{ run_ts }}"
+        state: directory
+        mode: "0755"
+
+    - name: Define per-host log file path
+      ansible.builtin.set_fact:
+        host_log: "{{ backup_root }}/{{ inventory_hostname }}/{{ run_ts }}/patching.log"
+
+    - name: Initialize log file (create if missing)
+      ansible.builtin.file:
+        path: "{{ host_log }}"
+        state: touch
+        mode: "0644"
+
+    - name: Log - starting run
+      ansible.builtin.lineinfile:
+        path: "{{ host_log }}"
+        line: "{{ ansible_date_time.iso8601 }} START patching run on {{ inventory_hostname }} (RHEL {{ ansible_facts.distribution_major_version }})"
+        insertafter: EOF
+
+    ###########################################################################
+    # 2) Backup df -khP and rpm -qa outputs (BEFORE patching)
+    ###########################################################################
+    - name: Backup df -khP (pre)
+      ansible.builtin.shell: |
+        set -o pipefail
+        df -khP > "{{ backup_root }}/{{ inventory_hostname }}/{{ run_ts }}/df_pre.txt"
+      args:
+        executable: /bin/bash
+
+    - name: Backup rpm -qa (sorted) (pre)
+      ansible.builtin.shell: |
+        set -o pipefail
+        rpm -qa | sort > "{{ backup_root }}/{{ inventory_hostname }}/{{ run_ts }}/rpm_qa_pre.txt"
+      args:
+        executable: /bin/bash
+
+    # Capture only mountpoints from df pre-run so we can compare later
+    - name: Capture df mountpoints (pre) for comparison
+      ansible.builtin.shell: |
+        set -o pipefail
+        df -khP | awk 'NR>1 {print $NF}' | sort -u
+      args:
+        executable: /bin/bash
+      register: df_mounts_pre_cmd
+
+    - name: Set fact - mountpoints pre
+      ansible.builtin.set_fact:
+        mounts_pre: "{{ df_mounts_pre_cmd.stdout_lines | default([]) }}"
+
+    - name: Save mountpoints pre to file
+      ansible.builtin.copy:
+        dest: "{{ backup_root }}/{{ inventory_hostname }}/{{ run_ts }}/mounts_pre.txt"
+        content: "{{ mounts_pre | join('\n') }}\n"
+        mode: "0644"
+
+    ###########################################################################
+    # 3) Patch the system (yum for RHEL7, dnf for RHEL8+)
+    ###########################################################################
+    - name: Patch system packages (block)
+      block:
+
+        # RHEL7 uses yum
+        - name: Update all packages on RHEL 7 using yum
+          ansible.builtin.yum:
+            name: "*"
+            state: latest
+            update_cache: true
+          when: ansible_facts.distribution_major_version | int == 7
+          register: patch_result
+
+        # RHEL8+ uses dnf (also works for 9/10)
+        - name: Update all packages on RHEL 8+ using dnf
+          ansible.builtin.dnf:
+            name: "*"
+            state: latest
+            update_cache: true
+          when: ansible_facts.distribution_major_version | int >= 8
+          register: patch_result
+
+        - name: Log - patch completed
+          ansible.builtin.lineinfile:
+            path: "{{ host_log }}"
+            line: "{{ ansible_date_time.iso8601 }} PATCH completed. changed={{ patch_result.changed | default('n/a') }}"
+            insertafter: EOF
+
+      rescue:
+        - name: Log - patch failed
+          ansible.builtin.lineinfile:
+            path: "{{ host_log }}"
+            line: "{{ ansible_date_time.iso8601 }} ERROR patching failed: {{ ansible_failed_result.msg | default(ansible_failed_result) }}"
+            insertafter: EOF
+
+        - name: Fail play due to patch error
+          ansible.builtin.fail:
+            msg: "Patching failed on {{ inventory_hostname }}. See log: {{ host_log }}"
+
+    ###########################################################################
+    # 4) Reboot the system and wait for it to return
+    ###########################################################################
+    - name: Log - rebooting host
+      ansible.builtin.lineinfile:
+        path: "{{ host_log }}"
+        line: "{{ ansible_date_time.iso8601 }} REBOOT initiated"
+        insertafter: EOF
+
+    - name: Reboot host and wait
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        pre_reboot_delay: "{{ reboot_pre_delay }}"
+        post_reboot_delay: "{{ reboot_post_delay }}"
+        test_command: "whoami"
+      register: reboot_result
+
+    - name: Log - reboot completed
+      ansible.builtin.lineinfile:
+        path: "{{ host_log }}"
+        line: "{{ ansible_date_time.iso8601 }} REBOOT completed in {{ reboot_result.elapsed }}s"
+        insertafter: EOF
+
+    ###########################################################################
+    # 5) Capture df -khP output (AFTER reboot) and compare mountpoints
+    ###########################################################################
+    - name: Backup df -khP (post)
+      ansible.builtin.shell: |
+        set -o pipefail
+        df -khP > "{{ backup_root }}/{{ inventory_hostname }}/{{ run_ts }}/df_post.txt"
+      args:
+        executable: /bin/bash
+
+    - name: Capture df mountpoints (post) for comparison
+      ansible.builtin.shell: |
+        set -o pipefail
+        df -khP | awk 'NR>1 {print $NF}' | sort -u
+      args:
+        executable: /bin/bash
+      register: df_mounts_post_cmd
+
+    - name: Set fact - mountpoints post
+      ansible.builtin.set_fact:
+        mounts_post: "{{ df_mounts_post_cmd.stdout_lines | default([]) }}"
+
+    - name: Save mountpoints post to file
+      ansible.builtin.copy:
+        dest: "{{ backup_root }}/{{ inventory_hostname }}/{{ run_ts }}/mounts_post.txt"
+        content: "{{ mounts_post | join('\n') }}\n"
+        mode: "0644"
+
+    # Compare pre vs post mountpoints (what existed pre that is missing post)
+    - name: Determine mountpoints missing after reboot (pre - post)
+      ansible.builtin.set_fact:
+        missing_mounts: "{{ mounts_pre | difference(mounts_post) }}"
+
+    - name: Log - mount comparison summary
+      ansible.builtin.lineinfile:
+        path: "{{ host_log }}"
+        line: "{{ ansible_date_time.iso8601 }} CHECK mounts: pre={{ mounts_pre | length }}, post={{ mounts_post | length }}, missing={{ missing_mounts | length }}"
+        insertafter: EOF
+
+    ###########################################################################
+    # 6) If mountpoints are missing, mount them from /etc/fstab
+    ###########################################################################
+    - name: Read mountpoints from /etc/fstab (excluding comments/blank/swap)
+      ansible.builtin.shell: |
+        set -o pipefail
+        awk '
+          $0 !~ /^[[:space:]]*#/ &&
+          NF >= 3 &&
+          $2 ~ /^\// &&
+          $3 != "swap"
+          {print $2}
+        ' /etc/fstab | sort -u
+      args:
+        executable: /bin/bash
+      register: fstab_mounts_cmd
+
+    - name: Set fact - fstab mountpoints
+      ansible.builtin.set_fact:
+        fstab_mounts: "{{ fstab_mounts_cmd.stdout_lines | default([]) }}"
+
+    - name: Identify missing mounts that exist in /etc/fstab
+      ansible.builtin.set_fact:
+        missing_mounts_in_fstab: "{{ missing_mounts | intersect(fstab_mounts) }}"
+
+    - name: Log - mounts missing that are in fstab
+      ansible.builtin.lineinfile:
+        path: "{{ host_log }}"
+        line: "{{ ansible_date_time.iso8601 }} Missing mounts in fstab: {{ missing_mounts_in_fstab | join(', ') if (missing_mounts_in_fstab|length>0) else 'none' }}"
+        insertafter: EOF
+
+    # Attempt to mount only the missing mountpoints that appear in fstab
+    - name: Mount missing filesystems from /etc/fstab
+      block:
+        - name: Ensure missing mountpoints are mounted (from fstab)
+          ansible.builtin.mount:
+            path: "{{ item }}"
+            state: mounted
+            fstab: /etc/fstab
+          loop: "{{ missing_mounts_in_fstab }}"
+          register: mount_fix_results
+
+        - name: Log - mount fixes attempted
+          ansible.builtin.lineinfile:
+            path: "{{ host_log }}"
+            line: "{{ ansible_date_time.iso8601 }} Mount fix attempted for: {{ missing_mounts_in_fstab | join(', ') }}"
+            insertafter: EOF
+
+      when: missing_mounts_in_fstab | length > 0
+
+      rescue:
+        - name: Log - mounting failed
+          ansible.builtin.lineinfile:
+            path: "{{ host_log }}"
+            line: "{{ ansible_date_time.iso8601 }} ERROR mounting missing filesystem(s): {{ ansible_failed_result.msg | default(ansible_failed_result) }}"
+            insertafter: EOF
+
+    ###########################################################################
+    # 7) Re-check df after mounting attempts and log final status
+    ###########################################################################
+    - name: Capture df mountpoints (final check)
+      ansible.builtin.shell: |
+        set -o pipefail
+        df -khP | awk 'NR>1 {print $NF}' | sort -u
+      args:
+        executable: /bin/bash
+      register: df_mounts_final_cmd
+
+    - name: Set fact - final mountpoints
+      ansible.builtin.set_fact:
+        mounts_final: "{{ df_mounts_final_cmd.stdout_lines | default([]) }}"
+
+    - name: Determine what is still missing after mount fixes (pre - final)
+      ansible.builtin.set_fact:
+        still_missing_mounts: "{{ mounts_pre | difference(mounts_final) }}"
+
+    - name: Log - final mount status
+      ansible.builtin.lineinfile:
+        path: "{{ host_log }}"
+        line: "{{ ansible_date_time.iso8601 }} FINAL mounts missing (if any): {{ still_missing_mounts | join(', ') if (still_missing_mounts|length>0) else 'none' }}"
+        insertafter: EOF
+
+    - name: Fail if critical mounts are still missing
+      ansible.builtin.fail:
+        msg: "Some mountpoints that existed pre-reboot are still missing: {{ still_missing_mounts }}"
+      when: still_missing_mounts | length > 0
+
+    - name: Log - run completed successfully
+      ansible.builtin.lineinfile:
+        path: "{{ host_log }}"
+        line: "{{ ansible_date_time.iso8601 }} SUCCESS patching run completed"
+        insertafter: EOF

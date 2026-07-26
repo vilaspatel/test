@@ -1,0 +1,335 @@
+---
+###############################################################################
+# Part 1: Pre-Patching Backup with Error Handling and Email Reporting
+###############################################################################
+
+- name: Pre-Patching Backup and Validation
+  hosts: all
+  become: true
+  gather_facts: true
+  ignore_unreachable: true
+
+  vars:
+   # backup_root: "/var/log/ansible_patching"
+    backup_root: "/tmp"
+
+    mail_to: "wesco-linux@wescodist.com"
+    mail_from: "ansible-precheck@wescodist.com"
+    smtp_host: "localhost"
+
+  tasks:
+
+    ###########################################################################
+    # Initialize status
+    ###########################################################################
+    - name: Initialize precheck status
+      ansible.builtin.set_fact:
+        precheck_status: "SUCCESS"
+        precheck_failed_task: "none"
+        precheck_failed_msg: "none"
+        precheck_backup_dir: "not_created"
+        precheck_host_log: "not_created"
+
+    ###########################################################################
+    # Precheck and backup block
+    ###########################################################################
+    - name: Precheck backup workflow
+      block:
+
+        - name: Create timestamp for this run
+          ansible.builtin.set_fact:
+            run_ts: "{{ ansible_date_time.iso8601_basic_short }}"
+
+        - name: Create host backup directory
+          ansible.builtin.file:
+            path: "{{ backup_root }}/{{ inventory_hostname }}/{{ run_ts }}"
+            state: directory
+            mode: "0755"
+
+        - name: Set backup directory fact
+          ansible.builtin.set_fact:
+            precheck_backup_dir: "{{ backup_root }}/{{ inventory_hostname }}/{{ run_ts }}"
+
+        - name: Define precheck log file
+          ansible.builtin.set_fact:
+            precheck_host_log: "{{ backup_root }}/{{ inventory_hostname }}/{{ run_ts }}/precheck.log"
+
+        - name: Create precheck log file
+          ansible.builtin.file:
+            path: "{{ precheck_host_log }}"
+            state: touch
+            mode: "0644"
+
+        - name: Log - precheck started
+          ansible.builtin.lineinfile:
+            path: "{{ precheck_host_log }}"
+            line: "{{ ansible_date_time.iso8601 }} START pre-patching backup on {{ inventory_hostname }} RHEL {{ ansible_facts.distribution_major_version | default('unknown') }}"
+            insertafter: EOF
+
+        #######################################################################
+        # Backup df -khP
+        #######################################################################
+        - name: Backup df -khP output
+          ansible.builtin.shell: |
+            set -o pipefail
+            df -khP > "{{ precheck_backup_dir }}/df_pre.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Validate df backup file exists
+          ansible.builtin.stat:
+            path: "{{ precheck_backup_dir }}/df_pre.txt"
+          register: df_pre_stat
+
+        - name: Fail if df backup was not created
+          ansible.builtin.fail:
+            msg: "df_pre.txt backup was not created successfully"
+          when: not df_pre_stat.stat.exists
+
+        #######################################################################
+        # Backup rpm -qa
+        #######################################################################
+        - name: Backup rpm -qa sorted output
+          ansible.builtin.shell: |
+            set -o pipefail
+            rpm -qa | sort > "{{ precheck_backup_dir }}/rpm_qa_pre.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Validate rpm backup file exists
+          ansible.builtin.stat:
+            path: "{{ precheck_backup_dir }}/rpm_qa_pre.txt"
+          register: rpm_pre_stat
+
+        - name: Fail if rpm backup was not created
+          ansible.builtin.fail:
+            msg: "rpm_qa_pre.txt backup was not created successfully"
+          when: not rpm_pre_stat.stat.exists
+
+        #######################################################################
+        # Capture mount list before patching
+        #######################################################################
+        - name: Capture mountpoints before patching
+          ansible.builtin.shell: |
+            set -o pipefail
+            df -khP | awk 'NR>1 {print $NF}' | sort -u
+          args:
+            executable: /bin/bash
+          register: df_mounts_pre_cmd
+
+        - name: Set fact - mountpoints before patching
+          ansible.builtin.set_fact:
+            mounts_pre: "{{ df_mounts_pre_cmd.stdout_lines | default([]) }}"
+
+        - name: Save mountpoints before patching to file
+          ansible.builtin.copy:
+            dest: "{{ precheck_backup_dir }}/mounts_pre.txt"
+            content: "{{ mounts_pre | join('\n') }}\n"
+            mode: "0644"
+
+        - name: Validate mount backup file exists
+          ansible.builtin.stat:
+            path: "{{ precheck_backup_dir }}/mounts_pre.txt"
+          register: mounts_pre_stat
+
+        - name: Fail if mount backup was not created
+          ansible.builtin.fail:
+            msg: "mounts_pre.txt backup was not created successfully"
+          when: not mounts_pre_stat.stat.exists
+
+        #######################################################################
+        # Mark host successful
+        #######################################################################
+        - name: Log - precheck completed successfully
+          ansible.builtin.lineinfile:
+            path: "{{ precheck_host_log }}"
+            line: "{{ ansible_date_time.iso8601 }} SUCCESS pre-patching backup completed"
+            insertafter: EOF
+
+        - name: Mark precheck successful
+          ansible.builtin.set_fact:
+            precheck_status: "SUCCESS"
+            precheck_failed_task: "none"
+            precheck_failed_msg: "none"
+
+      rescue:
+
+        #######################################################################
+        # Capture failure details
+        #######################################################################
+        - name: Mark precheck failed and capture failure details
+          ansible.builtin.set_fact:
+            precheck_status: "FAILED"
+            precheck_failed_task: "{{ ansible_failed_task.name | default('unknown task') }}"
+            precheck_failed_msg: >-
+              {{
+                ansible_failed_result.msg
+                | default(ansible_failed_result.stderr, true)
+                | default(ansible_failed_result.stdout, true)
+                | default(ansible_failed_result, true)
+              }}
+
+        - name: Write failure details to precheck log if available
+          ansible.builtin.lineinfile:
+            path: "{{ precheck_host_log | default('/tmp/ansible_precheck_failed.log') }}"
+            create: true
+            mode: "0644"
+            line: "{{ ansible_date_time.iso8601 | default('unknown_time') }} ERROR task='{{ precheck_failed_task }}' failure='{{ precheck_failed_msg }}'"
+            insertafter: EOF
+          ignore_errors: true
+
+        - name: Display failure details
+          ansible.builtin.debug:
+            msg: >-
+              Precheck backup failed on {{ inventory_hostname }}.
+              Failed task={{ precheck_failed_task }}.
+              Error={{ precheck_failed_msg }}.
+
+    ###########################################################################
+    # Ensure failed host remains available for final report
+    ###########################################################################
+    - name: Display host precheck status
+      ansible.builtin.debug:
+        msg: >-
+          Host={{ inventory_hostname }},
+          Status={{ precheck_status | default('UNKNOWN') }},
+          Backup_Dir={{ precheck_backup_dir | default('not_created') }},
+          Log={{ precheck_host_log | default('not_created') }}
+
+
+###############################################################################
+# Final Reporting Play
+###############################################################################
+
+- name: Final Precheck Backup Report
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  vars:
+    mail_to: "wesco-linux@wescodist.com"
+    mail_from: "ansible-precheck@wescodist.com"
+    smtp_host: "localhost"
+
+  tasks:
+
+    ###########################################################################
+    # Build failed host list
+    ###########################################################################
+    - name: Initialize report variables
+      ansible.builtin.set_fact:
+        success_hosts: []
+        failed_hosts: []
+        report_lines: []
+
+    - name: Build success host list
+      ansible.builtin.set_fact:
+        success_hosts: "{{ success_hosts + [item] }}"
+      loop: "{{ groups['all'] }}"
+      when: hostvars[item].precheck_status | default('UNREACHABLE') == 'SUCCESS'
+
+    - name: Build failed or unreachable host list
+      ansible.builtin.set_fact:
+        failed_hosts: "{{ failed_hosts + [item] }}"
+      loop: "{{ groups['all'] }}"
+      when: hostvars[item].precheck_status | default('UNREACHABLE') != 'SUCCESS'
+
+    ###########################################################################
+    # Build detailed report lines
+    ###########################################################################
+    - name: Build final report lines for all hosts
+      ansible.builtin.set_fact:
+        report_lines: "{{ report_lines + [report_entry] }}"
+      vars:
+        report_entry: |
+          ------------------------------------------------------------
+          Host: {{ item }}
+          Status: {{ hostvars[item].precheck_status | default('UNREACHABLE_OR_GATHER_FACTS_FAILED') }}
+          Failed Task: {{ hostvars[item].precheck_failed_task | default('Communication/Gather Facts') }}
+          Failure Message: {{ hostvars[item].precheck_failed_msg | default('Unable to communicate with server or gather_facts failed') }}
+          Backup Directory: {{ hostvars[item].precheck_backup_dir | default('not_created') }}
+          Host Log: {{ hostvars[item].precheck_host_log | default('not_created') }}
+      loop: "{{ groups['all'] }}"
+
+    ###########################################################################
+    # Create final email body
+    ###########################################################################
+    - name: Create final precheck report body
+      ansible.builtin.set_fact:
+        final_precheck_report: |
+          Linux Pre-Patching Backup Report
+
+          Summary:
+          ============================================================
+          Total Hosts              : {{ groups['all'] | length }}
+          Successful Hosts         : {{ success_hosts | length }}
+          Failed/Unreachable Hosts : {{ failed_hosts | length }}
+
+          {% if failed_hosts | length == 0 %}
+          Overall Status:
+          ============================================================
+          SUCCESS
+
+          All servers completed the pre-patching backup successfully.
+
+          Validation Completed:
+          ============================================================
+          - Server communication successful
+          - Facts gathered successfully
+          - Backup directory created successfully
+          - df -khP backup completed successfully
+          - rpm -qa backup completed successfully
+          - Mount list backup completed successfully
+
+          Successful Hosts:
+          ============================================================
+          {% for host in success_hosts %}
+          - {{ host }}
+          {% endfor %}
+
+          {% else %}
+          Overall Status:
+          ============================================================
+          FAILED
+
+          One or more servers failed during pre-patching backup or were unreachable.
+
+          Failed/Unreachable Hosts:
+          ============================================================
+          {% for host in failed_hosts %}
+          - {{ host }}
+          {% endfor %}
+
+          Detailed Host Report:
+          ============================================================
+          {% for line in report_lines %}
+          {{ line }}
+          {% endfor %}
+          {% endif %}
+
+          End of Report.
+
+    ###########################################################################
+    # Display report on console
+    ###########################################################################
+    - name: Display final precheck report
+      ansible.builtin.debug:
+        msg: "{{ final_precheck_report }}"
+
+    ###########################################################################
+    # Email success or failure report
+    ###########################################################################
+    - name: Send final precheck backup email report
+      ansible.builtin.mail:
+        host: "{{ smtp_host }}"
+        port: 25
+        from: "{{ mail_from }}"
+        to: "{{ mail_to }}"
+        subject: >-
+          {% if failed_hosts | length == 0 %}
+          SUCCESS - Linux Pre-Patching Backup Report
+          {% else %}
+          FAILED - Linux Pre-Patching Backup Report
+          {% endif %}
+        body: "{{ final_precheck_report }}"
+      delegate_to: localhost

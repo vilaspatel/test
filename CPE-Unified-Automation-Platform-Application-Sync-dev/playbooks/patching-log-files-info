@@ -1,0 +1,17 @@
+/var/log/ansible_patching/<hostname>/<timestamp>/
+
+patch_reboot.log
+kernel_before.txt
+kernel_after.txt
+uptime_before.txt
+uptime_after.txt
+df_before_patch.txt
+df_after_reboot.txt
+rpm_before_patch.txt
+rpm_after_patch_before_reboot.txt
+rpm_after_reboot.txt
+mounts_after_reboot.txt
+available_updates_before.txt
+yum_update.log
+dnf_update.log
+

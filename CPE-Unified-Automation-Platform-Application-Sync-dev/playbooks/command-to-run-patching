@@ -1,0 +1,11 @@
+ansible-playbook -i inventory.ini patch_reboot_phase2.yml -u sysadmin --become
+
+For limited testing:
+ansible-playbook -i inventory.ini patch_reboot_phase2.yml -u sysadmin --become --limit servername
+
+For syntax check:
+ansible-playbook --syntax-check patch_reboot_phase2.yml
+
+For dry run, I would not fully trust check mode for patching, but you can still do:
+ansible-playbook -i inventory.ini patch_reboot_phase2.yml -u sysadmin --become --check
+

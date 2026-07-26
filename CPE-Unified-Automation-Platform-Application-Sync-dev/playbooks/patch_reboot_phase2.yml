@@ -1,0 +1,739 @@
+---
+###############################################################################
+# Part 2: Linux Server Patching, Reboot, and Post-Reboot Validation
+###############################################################################
+
+- name: Linux Server Patching and Reboot
+  hosts: all
+
+  remote_user: sysadmin
+  become: true
+  become_method: sudo
+  become_user: root
+
+  gather_facts: true
+  ignore_unreachable: true
+
+  ###########################################################################
+  # IMPORTANT:
+  # serial controls how many servers are patched/rebooted at one time.
+  # Change this based on your maintenance window.
+  ###########################################################################
+  serial: 1
+
+  vars:
+    patch_root: "/var/log/ansible_patching"
+
+    mail_to: "wesco-linux@wescodist.com"
+    mail_from: "ansible-patching@wescodist.com"
+    smtp_host: "localhost"
+
+    reboot_timeout_seconds: 1800
+    reboot_connect_timeout: 30
+    post_reboot_delay: 60
+
+  tasks:
+
+    ###########################################################################
+    # Initialize status
+    ###########################################################################
+    - name: Initialize patching status
+      ansible.builtin.set_fact:
+        patch_status: "SUCCESS"
+        patch_failed_task: "none"
+        patch_failed_msg: "none"
+        patch_dir: "not_created"
+        patch_host_log: "not_created"
+        patch_reboot_required: "UNKNOWN"
+        patch_reboot_performed: "NO"
+        kernel_before: "unknown"
+        kernel_after: "unknown"
+        uptime_after: "unknown"
+
+    ###########################################################################
+    # Patching and reboot block
+    ###########################################################################
+    - name: Server patching workflow
+      block:
+
+        #######################################################################
+        # Timestamp and log directory
+        #######################################################################
+        - name: Create timestamp for patch run
+          ansible.builtin.set_fact:
+            patch_run_ts: "{{ lookup('pipe', 'date +%Y%m%dT%H%M%S') }}"
+
+        - name: Set patch directory fact
+          ansible.builtin.set_fact:
+            patch_dir: "{{ patch_root }}/{{ inventory_hostname }}/{{ patch_run_ts }}"
+
+        - name: Define patch log file
+          ansible.builtin.set_fact:
+            patch_host_log: "{{ patch_dir }}/patch_reboot.log"
+
+        #######################################################################
+        # Verify sudo/root access
+        #######################################################################
+        - name: Verify sysadmin sudo to root
+          ansible.builtin.command: id
+          register: sudo_test
+          changed_when: false
+
+        - name: Fail if effective user is not root
+          ansible.builtin.fail:
+            msg: "Connected as sysadmin but sudo to root failed. Current user details: {{ sudo_test.stdout }}"
+          when: "'uid=0(root)' not in sudo_test.stdout"
+
+        #######################################################################
+        # Create patch log directory and file
+        #######################################################################
+        - name: Create host patch directory
+          ansible.builtin.file:
+            path: "{{ patch_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: Create patch log file safely
+          ansible.builtin.file:
+            path: "{{ patch_host_log }}"
+            state: touch
+            mode: "0644"
+
+        - name: Validate patch log file exists
+          ansible.builtin.stat:
+            path: "{{ patch_host_log }}"
+          register: patch_log_stat
+
+        - name: Fail if patch log file was not created
+          ansible.builtin.fail:
+            msg: "Patch log file was not created: {{ patch_host_log }}"
+          when: not patch_log_stat.stat.exists
+
+        #######################################################################
+        # Log patching started
+        #######################################################################
+        - name: Log - patching started
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} START patching on {{ inventory_hostname }} RHEL {{ ansible_facts.distribution_major_version | default('unknown') }}"
+            insertafter: EOF
+
+        #######################################################################
+        # Capture pre-patching system state
+        #######################################################################
+        - name: Capture kernel before patching
+          ansible.builtin.command: uname -r
+          register: kernel_before_cmd
+          changed_when: false
+
+        - name: Set kernel before patching fact
+          ansible.builtin.set_fact:
+            kernel_before: "{{ kernel_before_cmd.stdout | default('unknown') }}"
+
+        - name: Save kernel before patching
+          ansible.builtin.copy:
+            dest: "{{ patch_dir }}/kernel_before.txt"
+            content: "{{ kernel_before }}\n"
+            mode: "0644"
+
+        - name: Capture uptime before patching
+          ansible.builtin.command: uptime
+          register: uptime_before_cmd
+          changed_when: false
+
+        - name: Save uptime before patching
+          ansible.builtin.copy:
+            dest: "{{ patch_dir }}/uptime_before.txt"
+            content: "{{ uptime_before_cmd.stdout | default('unknown') }}\n"
+            mode: "0644"
+
+        - name: Capture df before patching
+          ansible.builtin.shell: |
+            set -o pipefail
+            df -khP > "{{ patch_dir }}/df_before_patch.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Capture rpm list before patching
+          ansible.builtin.shell: |
+            set -o pipefail
+            rpm -qa | sort > "{{ patch_dir }}/rpm_before_patch.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Log - pre patch state captured
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS pre-patching state captured. Kernel before={{ kernel_before }}"
+            insertafter: EOF
+
+        #######################################################################
+        # Check lock status before patching
+        #######################################################################
+        - name: Check for active yum or rpm lock
+          ansible.builtin.shell: |
+            set -o pipefail
+            if pgrep -x yum >/dev/null 2>&1 || pgrep -x dnf >/dev/null 2>&1 || pgrep -x rpm >/dev/null 2>&1; then
+              echo "PACKAGE_MANAGER_BUSY"
+              exit 1
+            else
+              echo "PACKAGE_MANAGER_AVAILABLE"
+            fi
+          args:
+            executable: /bin/bash
+          register: package_lock_check
+          changed_when: false
+
+        - name: Log - package manager available
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS package manager lock check passed"
+            insertafter: EOF
+
+        #######################################################################
+        # Clean metadata/cache based on OS version
+        #######################################################################
+        - name: Clean yum cache on RHEL 6 and RHEL 7
+          ansible.builtin.shell: |
+            set -o pipefail
+            yum clean all
+          args:
+            executable: /bin/bash
+          when: ansible_facts.distribution_major_version | int <= 7
+          register: yum_clean_result
+          changed_when: false
+
+        - name: Clean dnf cache on RHEL 8 and RHEL 9
+          ansible.builtin.shell: |
+            set -o pipefail
+            dnf clean all
+          args:
+            executable: /bin/bash
+          when: ansible_facts.distribution_major_version | int >= 8
+          register: dnf_clean_result
+          changed_when: false
+
+        - name: Log - package cache cleaned
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS package manager cache cleaned"
+            insertafter: EOF
+
+        #######################################################################
+        # List available updates before applying
+        #######################################################################
+        - name: Capture available updates on RHEL 6 and RHEL 7
+          ansible.builtin.shell: |
+            set -o pipefail
+            yum check-update > "{{ patch_dir }}/available_updates_before.txt" 2>&1
+            rc=$?
+            if [ $rc -eq 0 ] || [ $rc -eq 100 ]; then
+              exit 0
+            else
+              exit $rc
+            fi
+          args:
+            executable: /bin/bash
+          when: ansible_facts.distribution_major_version | int <= 7
+          changed_when: false
+
+        - name: Capture available updates on RHEL 8 and RHEL 9
+          ansible.builtin.shell: |
+            set -o pipefail
+            dnf check-update > "{{ patch_dir }}/available_updates_before.txt" 2>&1
+            rc=$?
+            if [ $rc -eq 0 ] || [ $rc -eq 100 ]; then
+              exit 0
+            else
+              exit $rc
+            fi
+          args:
+            executable: /bin/bash
+          when: ansible_facts.distribution_major_version | int >= 8
+          changed_when: false
+
+        - name: Log - available updates captured
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS available updates captured"
+            insertafter: EOF
+
+        #######################################################################
+        # Apply patches
+        #######################################################################
+        - name: Apply all updates on RHEL 6 and RHEL 7
+          ansible.builtin.shell: |
+            set -o pipefail
+            yum -y update > "{{ patch_dir }}/yum_update.log" 2>&1
+          args:
+            executable: /bin/bash
+          when: ansible_facts.distribution_major_version | int <= 7
+          register: patch_update_result_rhel67
+
+        - name: Apply all updates on RHEL 8 and RHEL 9
+          ansible.builtin.shell: |
+            set -o pipefail
+            dnf -y update > "{{ patch_dir }}/dnf_update.log" 2>&1
+          args:
+            executable: /bin/bash
+          when: ansible_facts.distribution_major_version | int >= 8
+          register: patch_update_result_rhel89
+
+        - name: Log - patching completed
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS patch installation completed"
+            insertafter: EOF
+
+        #######################################################################
+        # Capture rpm list after patching before reboot
+        #######################################################################
+        - name: Capture rpm list after patching before reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+            rpm -qa | sort > "{{ patch_dir }}/rpm_after_patch_before_reboot.txt"
+          args:
+            executable: /bin/bash
+
+        #######################################################################
+        # Determine if reboot is required
+        #######################################################################
+        - name: Check if reboot is required
+          ansible.builtin.shell: |
+            set -o pipefail
+
+            REBOOT_REQUIRED="NO"
+
+            if command -v needs-restarting >/dev/null 2>&1; then
+              needs-restarting -r >/dev/null 2>&1
+              rc=$?
+              if [ $rc -eq 1 ]; then
+                REBOOT_REQUIRED="YES"
+              fi
+            else
+              latest_kernel="$(rpm -q kernel --last 2>/dev/null | awk 'NR==1 {print $1}' | sed 's/^kernel-//')"
+              running_kernel="$(uname -r)"
+
+              if [ -n "$latest_kernel" ] && [ "$latest_kernel" != "$running_kernel" ]; then
+                REBOOT_REQUIRED="YES"
+              fi
+            fi
+
+            echo "$REBOOT_REQUIRED"
+          args:
+            executable: /bin/bash
+          register: reboot_required_cmd
+          changed_when: false
+
+        - name: Set reboot required fact
+          ansible.builtin.set_fact:
+            patch_reboot_required: "{{ reboot_required_cmd.stdout | trim }}"
+
+        - name: Log - reboot requirement
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} INFO reboot required={{ patch_reboot_required }}"
+            insertafter: EOF
+
+        #######################################################################
+        # Reboot server
+        #
+        # Current logic:
+        # - Reboots only if reboot is required.
+        #
+        # If your maintenance standard is to reboot every patched server,
+        # change the when condition to:
+        # when: true
+        #######################################################################
+        - name: Reboot server if required
+          ansible.builtin.reboot:
+            msg: "Reboot initiated by Ansible after Linux patching"
+            reboot_timeout: "{{ reboot_timeout_seconds }}"
+            connect_timeout: "{{ reboot_connect_timeout }}"
+            post_reboot_delay: "{{ post_reboot_delay }}"
+            test_command: "whoami"
+          when: patch_reboot_required == "YES"
+
+        - name: Mark reboot performed
+          ansible.builtin.set_fact:
+            patch_reboot_performed: "YES"
+          when: patch_reboot_required == "YES"
+
+        - name: Mark reboot not required
+          ansible.builtin.set_fact:
+            patch_reboot_performed: "NO"
+          when: patch_reboot_required != "YES"
+
+        - name: Log - reboot completed or skipped
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS reboot step completed. Reboot required={{ patch_reboot_required }}, reboot performed={{ patch_reboot_performed }}"
+            insertafter: EOF
+
+        #######################################################################
+        # Refresh facts after reboot
+        #######################################################################
+        - name: Gather facts after reboot
+          ansible.builtin.setup:
+
+        #######################################################################
+        # Post-reboot validation
+        #######################################################################
+        - name: Capture kernel after reboot
+          ansible.builtin.command: uname -r
+          register: kernel_after_cmd
+          changed_when: false
+
+        - name: Set kernel after reboot fact
+          ansible.builtin.set_fact:
+            kernel_after: "{{ kernel_after_cmd.stdout | default('unknown') }}"
+
+        - name: Capture uptime after reboot
+          ansible.builtin.command: uptime
+          register: uptime_after_cmd
+          changed_when: false
+
+        - name: Set uptime after reboot fact
+          ansible.builtin.set_fact:
+            uptime_after: "{{ uptime_after_cmd.stdout | default('unknown') }}"
+
+        - name: Save kernel after reboot
+          ansible.builtin.copy:
+            dest: "{{ patch_dir }}/kernel_after.txt"
+            content: "{{ kernel_after }}\n"
+            mode: "0644"
+
+        - name: Save uptime after reboot
+          ansible.builtin.copy:
+            dest: "{{ patch_dir }}/uptime_after.txt"
+            content: "{{ uptime_after }}\n"
+            mode: "0644"
+
+        - name: Capture df after reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+            df -khP > "{{ patch_dir }}/df_after_reboot.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Capture rpm list after reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+            rpm -qa | sort > "{{ patch_dir }}/rpm_after_reboot.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Capture mounted filesystems after reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+            df -khP | awk 'NR>1 {print $NF}' | sort -u > "{{ patch_dir }}/mounts_after_reboot.txt"
+          args:
+            executable: /bin/bash
+
+        #######################################################################
+        # Basic service validation
+        #######################################################################
+        - name: Validate sshd is running
+          ansible.builtin.shell: |
+            set -o pipefail
+
+            if command -v systemctl >/dev/null 2>&1; then
+              systemctl is-active sshd
+            else
+              service sshd status >/dev/null 2>&1
+            fi
+          args:
+            executable: /bin/bash
+          register: sshd_status
+          changed_when: false
+
+        - name: Log - post reboot validation completed
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS post-reboot validation completed. Kernel after={{ kernel_after }}"
+            insertafter: EOF
+
+        #######################################################################
+        # Mark host successful
+        #######################################################################
+        - name: Mark patching successful
+          ansible.builtin.set_fact:
+            patch_status: "SUCCESS"
+            patch_failed_task: "none"
+            patch_failed_msg: "none"
+
+        - name: Log - patching workflow completed successfully
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS full patching and reboot workflow completed"
+            insertafter: EOF
+
+      rescue:
+
+        #######################################################################
+        # Capture failure details
+        #######################################################################
+        - name: Mark patching failed and capture failure details
+          ansible.builtin.set_fact:
+            patch_status: "FAILED"
+            patch_failed_task: "{{ ansible_failed_task.name | default('unknown task') }}"
+            patch_failed_msg: >-
+              {{
+                ansible_failed_result.msg
+                | default(ansible_failed_result.stderr, true)
+                | default(ansible_failed_result.stdout, true)
+                | default(ansible_failed_result, true)
+              }}
+
+        #######################################################################
+        # Attempt fallback logging
+        #######################################################################
+        - name: Create fallback patch failure log directory
+          ansible.builtin.file:
+            path: "/tmp/ansible_patch_failures"
+            state: directory
+            mode: "0755"
+          ignore_errors: true
+
+        - name: Write patch failure details to available log
+          ansible.builtin.lineinfile:
+            path: "{{ patch_host_log if patch_host_log != 'not_created' else '/tmp/ansible_patch_failures/' + inventory_hostname + '_patch_failed.log' }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} ERROR task='{{ patch_failed_task }}' failure='{{ patch_failed_msg }}'"
+            insertafter: EOF
+          ignore_errors: true
+
+        - name: Display patch failure details
+          ansible.builtin.debug:
+            msg: >-
+              Patching failed on {{ inventory_hostname }}.
+              Failed task={{ patch_failed_task }}.
+              Error={{ patch_failed_msg }}.
+
+    ###########################################################################
+    # Ensure host status is displayed
+    ###########################################################################
+    - name: Display host patch status
+      ansible.builtin.debug:
+        msg: >-
+          Host={{ inventory_hostname }},
+          Status={{ patch_status | default('UNKNOWN') }},
+          Reboot_Required={{ patch_reboot_required | default('UNKNOWN') }},
+          Reboot_Performed={{ patch_reboot_performed | default('UNKNOWN') }},
+          Kernel_Before={{ kernel_before | default('unknown') }},
+          Kernel_After={{ kernel_after | default('unknown') }},
+          Patch_Dir={{ patch_dir | default('not_created') }},
+          Log={{ patch_host_log | default('not_created') }}
+
+
+###############################################################################
+# Final Reporting Play
+###############################################################################
+
+- name: Final Linux Patching and Reboot Report
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  vars:
+    mail_to: "wesco-linux@wescodist.com"
+    mail_from: "ansible-patching@wescodist.com"
+    smtp_host: "localhost"
+
+  tasks:
+
+    - name: Initialize report variables
+      ansible.builtin.set_fact:
+        success_hosts: []
+        failed_hosts: []
+        report_lines: []
+
+    - name: Build success host list
+      ansible.builtin.set_fact:
+        success_hosts: "{{ success_hosts + [item] }}"
+      loop: "{{ groups['all'] }}"
+      when: hostvars[item].patch_status | default('UNREACHABLE') == 'SUCCESS'
+
+    - name: Build failed or unreachable host list
+      ansible.builtin.set_fact:
+        failed_hosts: "{{ failed_hosts + [item] }}"
+      loop: "{{ groups['all'] }}"
+      when: hostvars[item].patch_status | default('UNREACHABLE') != 'SUCCESS'
+
+    - name: Build final report lines for all hosts
+      ansible.builtin.set_fact:
+        report_lines: "{{ report_lines + [report_entry] }}"
+      vars:
+        report_entry: |
+          ------------------------------------------------------------
+          Host: {{ item }}
+          Status: {{ hostvars[item].patch_status | default('UNREACHABLE_OR_GATHER_FACTS_FAILED') }}
+          Failed Task: {{ hostvars[item].patch_failed_task | default('SSH/SUDO/GATHER_FACTS') }}
+          Failure Message: {{ hostvars[item].patch_failed_msg | default('SSH connection failed, sudo failed, patching failed, reboot failed, or gather_facts failed') }}
+          Reboot Required: {{ hostvars[item].patch_reboot_required | default('UNKNOWN') }}
+          Reboot Performed: {{ hostvars[item].patch_reboot_performed | default('UNKNOWN') }}
+          Kernel Before: {{ hostvars[item].kernel_before | default('unknown') }}
+          Kernel After: {{ hostvars[item].kernel_after | default('unknown') }}
+          Uptime After: {{ hostvars[item].uptime_after | default('unknown') }}
+          Patch Directory: {{ hostvars[item].patch_dir | default('not_created') }}
+          Host Log: {{ hostvars[item].patch_host_log | default('not_created') }}
+      loop: "{{ groups['all'] }}"
+
+    - name: Create final patching report body
+      ansible.builtin.set_fact:
+        final_patch_report: |
+          Linux Server Patching and Reboot Report
+
+          Summary:
+          ============================================================
+          Total Hosts              : {{ groups['all'] | length }}
+          Successful Hosts         : {{ success_hosts | length }}
+          Failed/Unreachable Hosts : {{ failed_hosts | length }}
+
+          {% if failed_hosts | length == 0 %}
+          Overall Status:
+          ============================================================
+          SUCCESS
+
+          All servers completed the patching and reboot workflow successfully.
+
+          Validation Completed:
+          ============================================================
+          - SSH communication successful
+          - Login successful as sysadmin
+          - sudo to root successful
+          - Facts gathered successfully
+          - Patch directory created successfully
+          - Patch log created successfully
+          - Kernel before patching captured
+          - Available updates captured
+          - OS patching completed
+          - Reboot requirement checked
+          - Reboot completed or skipped based on requirement
+          - Host returned after reboot
+          - Kernel after reboot captured
+          - Filesystem usage after reboot captured
+          - RPM list after reboot captured
+          - Mount list after reboot captured
+          - sshd service validation completed
+
+          Successful Hosts:
+          ============================================================
+          {% for host in success_hosts %}
+          - {{ host }}
+          {% endfor %}
+
+          Detailed Host Report:
+          ============================================================
+          {% for line in report_lines %}
+          {{ line }}
+          {% endfor %}
+
+          {% else %}
+          Overall Status:
+          ============================================================
+          FAILED
+
+          One or more servers failed during patching, reboot, post-reboot validation, or were unreachable.
+
+          Failed/Unreachable Hosts:
+          ============================================================
+          {% for host in failed_hosts %}
+          - {{ host }}
+          {% endfor %}
+
+          Detailed Host Report:
+          ============================================================
+          {% for line in report_lines %}
+          {{ line }}
+          {% endfor %}
+          {% endif %}
+
+          End of Report.
+
+    - name: Display final patch report
+      ansible.builtin.debug:
+        msg: "{{ final_patch_report }}"
+
+    ###########################################################################
+    # Save report locally on Ansible control node
+    ###########################################################################
+    - name: Set email subject
+      ansible.builtin.set_fact:
+        email_subject: >-
+          {% if failed_hosts | length == 0 %}
+          SUCCESS - Linux Server Patching and Reboot Report
+          {% else %}
+          FAILED - Linux Server Patching and Reboot Report
+          {% endif %}
+
+    - name: Save final patch report to local temp file
+      ansible.builtin.copy:
+        dest: "/tmp/linux_patching_reboot_report.txt"
+        content: "{{ final_patch_report }}"
+        mode: "0644"
+      delegate_to: localhost
+
+    ###########################################################################
+    # Send email using local Linux mail utilities
+    ###########################################################################
+    - name: Send final patching email report using mailx/mail/sendmail
+      ansible.builtin.shell: |
+        set -o pipefail
+
+        REPORT_FILE="/tmp/linux_patching_reboot_report.txt"
+        MAIL_TO="{{ mail_to }}"
+        MAIL_FROM="{{ mail_from }}"
+        SUBJECT="{{ email_subject | trim }}"
+
+        if command -v mailx >/dev/null 2>&1; then
+          mailx -r "${MAIL_FROM}" -s "${SUBJECT}" "${MAIL_TO}" < "${REPORT_FILE}"
+        elif command -v mail >/dev/null 2>&1; then
+          mail -s "${SUBJECT}" "${MAIL_TO}" < "${REPORT_FILE}"
+        elif command -v sendmail >/dev/null 2>&1; then
+          {
+            echo "From: ${MAIL_FROM}"
+            echo "To: ${MAIL_TO}"
+            echo "Subject: ${SUBJECT}"
+            echo
+            cat "${REPORT_FILE}"
+          } | sendmail -t
+        else
+          echo "ERROR: No mailx, mail, or sendmail command found on Ansible control node."
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      register: email_send_result
+      changed_when: true
+      failed_when: false
+
+    - name: Display email send result
+      ansible.builtin.debug:
+        msg: >-
+          Email command return code={{ email_send_result.rc }}.
+          stdout={{ email_send_result.stdout | default('') }}.
+          stderr={{ email_send_result.stderr | default('') }}.

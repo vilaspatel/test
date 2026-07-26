@@ -1,0 +1,70 @@
+---
+- name: Linux Reboot and Validation
+  hosts: all
+
+  remote_user: sysadmin
+  become: true
+  become_method: sudo
+  become_user: root
+
+  serial: 1
+  gather_facts: true
+  ignore_unreachable: true
+
+  vars:
+    reboot_timeout_seconds: 1800
+    reboot_connect_timeout: 30
+    post_reboot_delay: 60
+
+  tasks:
+
+    - name: Capture kernel before reboot
+      command: uname -r
+      register: kernel_before
+      changed_when: false
+
+    - name: Reboot server
+      reboot:
+        msg: "Ansible maintenance reboot"
+        reboot_timeout: "{{ reboot_timeout_seconds }}"
+        connect_timeout: "{{ reboot_connect_timeout }}"
+        post_reboot_delay: "{{ post_reboot_delay }}"
+        test_command: whoami
+
+    - name: Gather facts after reboot
+      setup:
+
+    - name: Capture kernel after reboot
+      command: uname -r
+      register: kernel_after
+      changed_when: false
+
+    - name: Capture uptime
+      command: uptime
+      register: uptime_after
+      changed_when: false
+
+    - name: Validate SSHD
+      shell: |
+        if command -v systemctl >/dev/null 2>&1
+        then
+          systemctl is-active sshd
+        else
+          service sshd status >/dev/null
+        fi
+      register: sshd_check
+      changed_when: false
+
+    - name: Capture mounted filesystems
+      shell: |
+        df -khP | awk 'NR>1 {print $NF}' | sort -u
+      register: mount_check
+      changed_when: false
+
+    - name: Display validation results
+      debug:
+        msg:
+          - "Kernel Before={{ kernel_before.stdout }}"
+          - "Kernel After={{ kernel_after.stdout }}"
+          - "Uptime={{ uptime_after.stdout }}"
+          - "SSHD={{ sshd_check.stdout }}"

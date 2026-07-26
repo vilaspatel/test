@@ -1,0 +1,392 @@
+---
+###############################################################################
+# Phase 2A: Linux Server Patching Only
+###############################################################################
+
+- name: Linux Server Patching Only
+  hosts: all
+
+  remote_user: sysadmin
+  become: true
+  become_method: sudo
+  become_user: root
+
+  gather_facts: true
+  ignore_unreachable: true
+
+  serial: 1
+
+  vars:
+    patch_root: "/var/log/ansible_patching"
+
+  tasks:
+
+    ###########################################################################
+    # Initialize Status
+    ###########################################################################
+    - name: Initialize patch status
+      set_fact:
+        patch_status: "SUCCESS"
+        patch_failed_task: "none"
+        patch_failed_msg: "none"
+        patch_dir: "not_created"
+        patch_log: "not_created"
+        patch_count: "unknown"
+
+    ###########################################################################
+    # Begin patch workflow
+    ###########################################################################
+    - name: Patch workflow
+      block:
+
+        - name: Create timestamp
+          set_fact:
+            run_ts: "{{ lookup('pipe', 'date +%Y%m%dT%H%M%S') }}"
+
+        - name: Set patch directory
+          set_fact:
+            patch_dir: "{{ patch_root }}/{{ inventory_hostname }}/{{ run_ts }}"
+
+        - name: Set patch log
+          set_fact:
+            patch_log: "{{ patch_dir }}/patching.log"
+
+        #######################################################################
+        # Verify Root
+        #######################################################################
+        - name: Verify sudo access
+          command: id
+          register: sudo_test
+          changed_when: false
+
+        - name: Fail if root access unavailable
+          fail:
+            msg: "Root access unavailable. {{ sudo_test.stdout }}"
+          when: "'uid=0(root)' not in sudo_test.stdout"
+
+        #######################################################################
+        # Create Directories
+        #######################################################################
+        - name: Create patch directory
+          file:
+            path: "{{ patch_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: Create log file
+          file:
+            path: "{{ patch_log }}"
+            state: touch
+            mode: "0644"
+
+        - name: Log start
+          lineinfile:
+            path: "{{ patch_log }}"
+            create: true
+            line: "{{ lookup('pipe','date +%Y-%m-%dT%H:%M:%S') }} START patching {{ inventory_hostname }}"
+            insertafter: EOF
+
+        #######################################################################
+        # Capture Current State
+        #######################################################################
+        - name: Capture kernel
+          command: uname -r
+          register: kernel_before
+          changed_when: false
+
+        - name: Save kernel
+          copy:
+            dest: "{{ patch_dir }}/kernel_before.txt"
+            content: "{{ kernel_before.stdout }}\n"
+
+        - name: Save package inventory before patching
+          shell: |
+            rpm -qa | sort > "{{ patch_dir }}/rpm_before_patch.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Save filesystem information
+          shell: |
+            df -khP > "{{ patch_dir }}/df_before_patch.txt"
+          args:
+            executable: /bin/bash
+
+        #######################################################################
+        # Check Package Manager Lock
+        #######################################################################
+        - name: Check package manager lock
+          shell: |
+            if pgrep -x yum >/dev/null 2>&1 || \
+               pgrep -x dnf >/dev/null 2>&1 || \
+               pgrep -x rpm >/dev/null 2>&1
+            then
+               echo "LOCKED"
+               exit 1
+            else
+               echo "AVAILABLE"
+            fi
+          args:
+            executable: /bin/bash
+          register: package_lock
+          changed_when: false
+
+        #######################################################################
+        # Clean Cache
+        #######################################################################
+        - name: Clean yum cache
+          shell: yum clean all
+          when: ansible_facts.distribution_major_version|int <= 7
+          changed_when: false
+
+        - name: Clean dnf cache
+          shell: dnf clean all
+          when: ansible_facts.distribution_major_version|int >= 8
+          changed_when: false
+
+        #######################################################################
+        # Check Available Updates
+        #######################################################################
+        - name: Check available updates (yum)
+          shell: |
+            yum check-update > "{{ patch_dir }}/available_updates.txt" 2>&1
+            RC=$?
+
+            if [ $RC -eq 0 ] || [ $RC -eq 100 ]
+            then
+                exit 0
+            fi
+
+            exit $RC
+          args:
+            executable: /bin/bash
+          when: ansible_facts.distribution_major_version|int <= 7
+          changed_when: false
+
+        - name: Check available updates (dnf)
+          shell: |
+            dnf check-update > "{{ patch_dir }}/available_updates.txt" 2>&1
+            RC=$?
+
+            if [ $RC -eq 0 ] || [ $RC -eq 100 ]
+            then
+                exit 0
+            fi
+
+            exit $RC
+          args:
+            executable: /bin/bash
+          when: ansible_facts.distribution_major_version|int >= 8
+          changed_when: false
+
+        #######################################################################
+        # PATCHING RHEL 6 / 7
+        #######################################################################
+        - name: Patch RHEL 6 and 7
+          shell: |
+            set -o pipefail
+
+            yum -y update \
+              --exclude=java* \
+              --exclude=*java* \
+              --exclude=firefox* \
+              > "{{ patch_dir }}/yum_update.log" 2>&1
+          args:
+            executable: /bin/bash
+          register: yum_patch_results
+          when: ansible_facts.distribution_major_version|int <= 7
+
+        #######################################################################
+        # PATCHING RHEL 8 / 9
+        #######################################################################
+        - name: Patch RHEL 8 and 9
+          shell: |
+            set -o pipefail
+
+            dnf -y update \
+              --exclude=java* \
+              --exclude=*java* \
+              --exclude=firefox* \
+              > "{{ patch_dir }}/dnf_update.log" 2>&1
+          args:
+            executable: /bin/bash
+          register: dnf_patch_results
+          when: ansible_facts.distribution_major_version|int >= 8
+
+        #######################################################################
+        # Capture Package Inventory After Patching
+        #######################################################################
+        - name: Save package inventory after patching
+          shell: |
+            rpm -qa | sort > "{{ patch_dir }}/rpm_after_patch.txt"
+          args:
+            executable: /bin/bash
+
+        #######################################################################
+        # Capture Updated Packages
+        #######################################################################
+        - name: Capture updated packages yum
+          shell: |
+            grep -Ei "Updated:|Installed:" \
+            "{{ patch_dir }}/yum_update.log" \
+            > "{{ patch_dir }}/packages_updated.txt" \
+            2>/dev/null || true
+          args:
+            executable: /bin/bash
+          when: ansible_facts.distribution_major_version|int <= 7
+
+        - name: Capture updated packages dnf
+          shell: |
+            grep -Ei "Upgraded:|Installed:" \
+            "{{ patch_dir }}/dnf_update.log" \
+            > "{{ patch_dir }}/packages_updated.txt" \
+            2>/dev/null || true
+          args:
+            executable: /bin/bash
+          when: ansible_facts.distribution_major_version|int >= 8
+
+        #######################################################################
+        # Count Updates
+        #######################################################################
+        - name: Count updated packages
+          shell: |
+            wc -l < "{{ patch_dir }}/packages_updated.txt" 2>/dev/null || echo 0
+          args:
+            executable: /bin/bash
+          register: update_count
+          changed_when: false
+
+        - name: Save patch count
+          set_fact:
+            patch_count: "{{ update_count.stdout }}"
+
+        #######################################################################
+        # Mark Success
+        #######################################################################
+        - name: Log patch success
+          lineinfile:
+            path: "{{ patch_log }}"
+            create: true
+            line: "{{ lookup('pipe','date +%Y-%m-%dT%H:%M:%S') }} SUCCESS patching completed"
+            insertafter: EOF
+
+        - name: Mark success
+          set_fact:
+            patch_status: "SUCCESS"
+
+      #########################################################################
+      # ERROR HANDLING
+      #########################################################################
+      rescue:
+
+        - name: Capture failure
+          set_fact:
+            patch_status: "FAILED"
+            patch_failed_task: "{{ ansible_failed_task.name | default('Unknown') }}"
+            patch_failed_msg: "{{ ansible_failed_result.msg | default(ansible_failed_result) }}"
+
+        - name: Display failure
+          debug:
+            msg:
+              - "Host: {{ inventory_hostname }}"
+              - "Failed Task: {{ patch_failed_task }}"
+              - "Failure: {{ patch_failed_msg }}"
+
+    ###########################################################################
+    # Host Status
+    ###########################################################################
+    - name: Display host patch status
+      debug:
+        msg:
+          - "Host={{ inventory_hostname }}"
+          - "Status={{ patch_status }}"
+          - "Patch Count={{ patch_count }}"
+          - "Patch Directory={{ patch_dir }}"
+
+###############################################################################
+# REPORTING
+###############################################################################
+
+- name: Final Patching Report
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    mail_to: "wesco-linux@wescodist.com"
+    mail_from: "ansible-patching@wescodist.com"
+
+  tasks:
+
+    - name: Initialize report data
+      set_fact:
+        success_hosts: []
+        failed_hosts: []
+
+    - name: Build success list
+      set_fact:
+        success_hosts: "{{ success_hosts + [item] }}"
+      loop: "{{ groups['all'] }}"
+      when: hostvars[item].patch_status|default('FAILED') == "SUCCESS"
+
+    - name: Build failed list
+      set_fact:
+        failed_hosts: "{{ failed_hosts + [item] }}"
+      loop: "{{ groups['all'] }}"
+      when: hostvars[item].patch_status|default('FAILED') != "SUCCESS"
+
+    - name: Build report
+      set_fact:
+        final_patch_report: |
+          Linux Patching Report
+
+          ==========================================================
+          Total Hosts   : {{ groups['all'] | length }}
+          Successful    : {{ success_hosts | length }}
+          Failed        : {{ failed_hosts | length }}
+          ==========================================================
+
+          SUCCESSFUL HOSTS
+          ----------------------------------------------------------
+          {% for host in success_hosts %}
+          Host            : {{ host }}
+          Patch Count     : {{ hostvars[host].patch_count }}
+          Patch Directory : {{ hostvars[host].patch_dir }}
+          ----------------------------------------------------------
+          {% endfor %}
+
+          FAILED HOSTS
+          ----------------------------------------------------------
+          {% for host in failed_hosts %}
+          Host            : {{ host }}
+          Failed Task     : {{ hostvars[host].patch_failed_task | default('Unknown') }}
+          Failure Message : {{ hostvars[host].patch_failed_msg | default('Unknown') }}
+          ----------------------------------------------------------
+          {% endfor %}
+
+          Package Exclusions Used:
+          ----------------------------------------------------------
+          java*
+          *java*
+          firefox*
+          ----------------------------------------------------------
+
+    - name: Display report
+      debug:
+        msg: "{{ final_patch_report }}"
+
+    - name: Save report
+      copy:
+        dest: "/tmp/linux_patching_report.txt"
+        content: "{{ final_patch_report }}"
+        mode: "0644"
+
+    - name: Send email report
+      shell: |
+        REPORT_FILE=/tmp/linux_patching_report.txt
+
+        if command -v mailx >/dev/null 2>&1; then
+          mailx -s "Linux Patching Report" {{ mail_to }} < $REPORT_FILE
+        elif command -v mail >/dev/null 2>&1; then
+          mail -s "Linux Patching Report" {{ mail_to }} < $REPORT_FILE
+        fi
+      failed_when: false
+      changed_when: true

@@ -1,0 +1,696 @@
+---
+###############################################################################
+# Phase 2B: Linux Server Reboot and Validation
+# Purpose : Reboot servers after patching and validate post-reboot health
+# Supports: RHEL 6, RHEL 7, RHEL 8, RHEL 9
+###############################################################################
+
+- name: Linux Server Reboot and Post-Reboot Validation
+  hosts: all
+
+  remote_user: sysadmin
+  become: true
+  become_method: sudo
+  become_user: root
+
+  gather_facts: true
+  ignore_unreachable: true
+
+  ###########################################################################
+  # Reboot one server at a time for production safety.
+  # Change to serial: 2, 5, etc. if you want batch rebooting.
+  ###########################################################################
+  serial: 1
+
+  vars:
+    reboot_root: "/var/log/ansible_patching"
+
+    mail_to: "wesco-linux@wescodist.com"
+    mail_from: "ansible-reboot@wescodist.com"
+
+    reboot_timeout_seconds: 1800
+    reboot_connect_timeout: 30
+    post_reboot_delay: 60
+
+  tasks:
+
+    ###########################################################################
+    # Initialize reboot status
+    ###########################################################################
+    - name: Initialize reboot validation status
+      ansible.builtin.set_fact:
+        reboot_status: "SUCCESS"
+        reboot_failed_task: "none"
+        reboot_failed_msg: "none"
+        reboot_dir: "not_created"
+        reboot_log: "not_created"
+        os_major_version: "{{ ansible_facts.distribution_major_version | default('unknown') }}"
+        kernel_before: "unknown"
+        kernel_after: "unknown"
+        uptime_before: "unknown"
+        uptime_after: "unknown"
+        reboot_performed: "NO"
+        sshd_status_after: "unknown"
+        mount_validation_status: "unknown"
+        df_validation_status: "unknown"
+        missing_mounts_detail: "none"
+
+    ###########################################################################
+    # Main reboot workflow
+    ###########################################################################
+    - name: Reboot and validation workflow
+      block:
+
+        #######################################################################
+        # Validate supported OS version
+        #######################################################################
+        - name: Validate supported RHEL version
+          ansible.builtin.fail:
+            msg: >-
+              Unsupported OS detected.
+              Distribution={{ ansible_facts.distribution | default('unknown') }},
+              Major Version={{ ansible_facts.distribution_major_version | default('unknown') }}.
+              This playbook supports RHEL 6, 7, 8, and 9.
+          when: >
+            ansible_facts.distribution_major_version is not defined or
+            ansible_facts.distribution_major_version | int not in [6, 7, 8, 9]
+
+        #######################################################################
+        # Create timestamp and reboot log directory
+        #######################################################################
+        - name: Create reboot timestamp
+          ansible.builtin.set_fact:
+            run_ts: "{{ lookup('pipe', 'date +%Y%m%dT%H%M%S') }}"
+
+        - name: Set reboot directory
+          ansible.builtin.set_fact:
+            reboot_dir: "{{ reboot_root }}/{{ inventory_hostname }}/{{ run_ts }}"
+
+        - name: Set reboot log file
+          ansible.builtin.set_fact:
+            reboot_log: "{{ reboot_dir }}/reboot_validation.log"
+
+        #######################################################################
+        # Verify sudo/root access
+        #######################################################################
+        - name: Verify sysadmin sudo to root
+          ansible.builtin.command: id
+          register: sudo_test
+          changed_when: false
+
+        - name: Fail if effective user is not root
+          ansible.builtin.fail:
+            msg: "Connected as sysadmin but sudo to root failed. Current user details: {{ sudo_test.stdout }}"
+          when: "'uid=0(root)' not in sudo_test.stdout"
+
+        #######################################################################
+        # Create reboot log directory and log file
+        #######################################################################
+        - name: Create reboot validation directory
+          ansible.builtin.file:
+            path: "{{ reboot_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: Create reboot validation log file
+          ansible.builtin.file:
+            path: "{{ reboot_log }}"
+            state: touch
+            mode: "0644"
+
+        - name: Validate reboot log file exists
+          ansible.builtin.stat:
+            path: "{{ reboot_log }}"
+          register: reboot_log_stat
+
+        - name: Fail if reboot log file was not created
+          ansible.builtin.fail:
+            msg: "Reboot validation log file was not created: {{ reboot_log }}"
+          when: not reboot_log_stat.stat.exists
+
+        - name: Log - reboot validation started
+          ansible.builtin.lineinfile:
+            path: "{{ reboot_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} START reboot validation on {{ inventory_hostname }} RHEL {{ os_major_version }}"
+            insertafter: EOF
+
+        #######################################################################
+        # Capture pre-reboot state
+        #######################################################################
+        - name: Capture kernel before reboot
+          ansible.builtin.command: uname -r
+          register: kernel_before_cmd
+          changed_when: false
+
+        - name: Set kernel before reboot fact
+          ansible.builtin.set_fact:
+            kernel_before: "{{ kernel_before_cmd.stdout | default('unknown') }}"
+
+        - name: Capture uptime before reboot
+          ansible.builtin.command: uptime
+          register: uptime_before_cmd
+          changed_when: false
+
+        - name: Set uptime before reboot fact
+          ansible.builtin.set_fact:
+            uptime_before: "{{ uptime_before_cmd.stdout | default('unknown') }}"
+
+        - name: Save kernel before reboot
+          ansible.builtin.copy:
+            dest: "{{ reboot_dir }}/kernel_before_reboot.txt"
+            content: "{{ kernel_before }}\n"
+            mode: "0644"
+
+        - name: Save uptime before reboot
+          ansible.builtin.copy:
+            dest: "{{ reboot_dir }}/uptime_before_reboot.txt"
+            content: "{{ uptime_before }}\n"
+            mode: "0644"
+
+        - name: Capture df before reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+            df -khP > "{{ reboot_dir }}/df_before_reboot.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Capture mount points before reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+            df -khP | awk 'NR>1 {print $NF}' | sort -u > "{{ reboot_dir }}/mounts_before_reboot.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Capture rpm list before reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+            rpm -qa | sort > "{{ reboot_dir }}/rpm_before_reboot.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Log - pre-reboot state captured
+          ansible.builtin.lineinfile:
+            path: "{{ reboot_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS pre-reboot state captured. Kernel before={{ kernel_before }}"
+            insertafter: EOF
+
+        #######################################################################
+        # Reboot server
+        #######################################################################
+        - name: Reboot server
+          ansible.builtin.reboot:
+            msg: "Reboot initiated by Ansible after Linux patching"
+            reboot_timeout: "{{ reboot_timeout_seconds }}"
+            connect_timeout: "{{ reboot_connect_timeout }}"
+            post_reboot_delay: "{{ post_reboot_delay }}"
+            test_command: "whoami"
+
+        - name: Mark reboot performed
+          ansible.builtin.set_fact:
+            reboot_performed: "YES"
+
+        - name: Log - reboot completed
+          ansible.builtin.lineinfile:
+            path: "{{ reboot_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS reboot completed and host is reachable"
+            insertafter: EOF
+
+        #######################################################################
+        # Refresh facts after reboot
+        #######################################################################
+        - name: Gather facts after reboot
+          ansible.builtin.setup:
+
+        #######################################################################
+        # Capture post-reboot state
+        #######################################################################
+        - name: Capture kernel after reboot
+          ansible.builtin.command: uname -r
+          register: kernel_after_cmd
+          changed_when: false
+
+        - name: Set kernel after reboot fact
+          ansible.builtin.set_fact:
+            kernel_after: "{{ kernel_after_cmd.stdout | default('unknown') }}"
+
+        - name: Capture uptime after reboot
+          ansible.builtin.command: uptime
+          register: uptime_after_cmd
+          changed_when: false
+
+        - name: Set uptime after reboot fact
+          ansible.builtin.set_fact:
+            uptime_after: "{{ uptime_after_cmd.stdout | default('unknown') }}"
+
+        - name: Save kernel after reboot
+          ansible.builtin.copy:
+            dest: "{{ reboot_dir }}/kernel_after_reboot.txt"
+            content: "{{ kernel_after }}\n"
+            mode: "0644"
+
+        - name: Save uptime after reboot
+          ansible.builtin.copy:
+            dest: "{{ reboot_dir }}/uptime_after_reboot.txt"
+            content: "{{ uptime_after }}\n"
+            mode: "0644"
+
+        - name: Capture df after reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+            df -khP > "{{ reboot_dir }}/df_after_reboot.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Capture mount points after reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+            df -khP | awk 'NR>1 {print $NF}' | sort -u > "{{ reboot_dir }}/mounts_after_reboot.txt"
+          args:
+            executable: /bin/bash
+
+        - name: Capture rpm list after reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+            rpm -qa | sort > "{{ reboot_dir }}/rpm_after_reboot.txt"
+          args:
+            executable: /bin/bash
+
+        #######################################################################
+        # Validate filesystem and mounts
+        #######################################################################
+        - name: Validate df output after reboot exists
+          ansible.builtin.stat:
+            path: "{{ reboot_dir }}/df_after_reboot.txt"
+          register: df_after_stat
+
+        - name: Fail if df output after reboot is missing
+          ansible.builtin.fail:
+            msg: "df_after_reboot.txt was not created successfully under {{ reboot_dir }}"
+          when: not df_after_stat.stat.exists or df_after_stat.stat.size | int == 0
+
+        - name: Set df validation status
+          ansible.builtin.set_fact:
+            df_validation_status: "SUCCESS"
+
+        - name: Compare mount points before and after reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+
+            comm -23 "{{ reboot_dir }}/mounts_before_reboot.txt" "{{ reboot_dir }}/mounts_after_reboot.txt" \
+              > "{{ reboot_dir }}/missing_mounts_after_reboot.txt" || true
+
+            if [ -s "{{ reboot_dir }}/missing_mounts_after_reboot.txt" ]; then
+              echo "MISSING_MOUNTS"
+              cat "{{ reboot_dir }}/missing_mounts_after_reboot.txt"
+              exit 1
+            else
+              echo "MOUNTS_OK"
+            fi
+          args:
+            executable: /bin/bash
+          register: mount_compare_result
+          changed_when: false
+
+        - name: Set mount validation status
+          ansible.builtin.set_fact:
+            mount_validation_status: "{{ mount_compare_result.stdout | default('MOUNTS_OK', true) | trim }}"
+
+        #######################################################################
+        # Validate SSHD service
+        #
+        # RHEL 6 generally uses service command.
+        # RHEL 7/8/9 generally use systemctl.
+        #
+        # Fixed:
+        # This task always provides valid stdout, and the next set_fact task
+        # has a proper key/value pair to avoid:
+        # "No key/value pairs provided"
+        #######################################################################
+        - name: Validate sshd service after reboot
+          ansible.builtin.shell: |
+            set -o pipefail
+
+            if command -v systemctl >/dev/null 2>&1; then
+              sshd_state="$(systemctl is-active sshd 2>/dev/null || true)"
+
+              if [ "$sshd_state" = "active" ]; then
+                echo "SSHD_ACTIVE"
+                exit 0
+              else
+                echo "SSHD_NOT_ACTIVE_${sshd_state}"
+                exit 1
+              fi
+            else
+              service sshd status >/dev/null 2>&1
+              rc=$?
+
+              if [ $rc -eq 0 ]; then
+                echo "SSHD_RUNNING"
+                exit 0
+              else
+                echo "SSHD_NOT_RUNNING"
+                exit 1
+              fi
+            fi
+          args:
+            executable: /bin/bash
+          register: sshd_check
+          changed_when: false
+
+        - name: Set sshd validation status
+          ansible.builtin.set_fact:
+            sshd_status_after: "{{ sshd_check.stdout | default('unknown', true) | trim }}"
+
+        #######################################################################
+        # Log validation success
+        #######################################################################
+        - name: Log - post-reboot validation completed
+          ansible.builtin.lineinfile:
+            path: "{{ reboot_log }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} SUCCESS post-reboot validation completed. Kernel before={{ kernel_before }}, Kernel after={{ kernel_after }}, SSHD={{ sshd_status_after }}, Mounts={{ mount_validation_status }}"
+            insertafter: EOF
+
+        - name: Mark reboot validation successful
+          ansible.builtin.set_fact:
+            reboot_status: "SUCCESS"
+            reboot_failed_task: "none"
+            reboot_failed_msg: "none"
+
+      #########################################################################
+      # Error handling
+      #########################################################################
+      rescue:
+
+        - name: Capture missing mounts details if available
+          ansible.builtin.shell: |
+            if [ -f "{{ reboot_dir }}/missing_mounts_after_reboot.txt" ]; then
+              cat "{{ reboot_dir }}/missing_mounts_after_reboot.txt"
+            else
+              echo "none"
+            fi
+          args:
+            executable: /bin/bash
+          register: missing_mounts_cmd
+          changed_when: false
+          failed_when: false
+          ignore_errors: true
+
+        - name: Mark reboot validation failed and capture failure details
+          ansible.builtin.set_fact:
+            reboot_status: "FAILED"
+            reboot_failed_task: "{{ ansible_failed_task.name | default('unknown task') }}"
+            reboot_failed_msg: >-
+              {{
+                ansible_failed_result.msg
+                | default(ansible_failed_result.stderr, true)
+                | default(ansible_failed_result.stdout, true)
+                | default(ansible_failed_result, true)
+              }}
+            missing_mounts_detail: "{{ missing_mounts_cmd.stdout | default('none', true) | trim }}"
+
+        - name: Create fallback reboot failure log directory
+          ansible.builtin.file:
+            path: "/tmp/ansible_reboot_failures"
+            state: directory
+            mode: "0755"
+          ignore_errors: true
+
+        - name: Write reboot failure details to available log
+          ansible.builtin.lineinfile:
+            path: "{{ reboot_log if reboot_log != 'not_created' else '/tmp/ansible_reboot_failures/' + inventory_hostname + '_reboot_failed.log' }}"
+            create: true
+            mode: "0644"
+            line: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S') }} ERROR task='{{ reboot_failed_task }}' failure='{{ reboot_failed_msg }}' missing_mounts='{{ missing_mounts_detail }}'"
+            insertafter: EOF
+          ignore_errors: true
+
+        - name: Save reboot failure summary
+          ansible.builtin.copy:
+            dest: "{{ reboot_dir }}/reboot_failure_summary.txt"
+            mode: "0644"
+            content: |
+              Reboot Failure Summary
+              ============================================================
+
+              Host:
+              {{ inventory_hostname }}
+
+              Failed Task:
+              {{ reboot_failed_task }}
+
+              Failure Message:
+              {{ reboot_failed_msg }}
+
+              Missing Mounts:
+              {{ missing_mounts_detail }}
+
+              Reboot Directory:
+              {{ reboot_dir }}
+
+              Reboot Log:
+              {{ reboot_log }}
+
+          ignore_errors: true
+
+        - name: Display reboot validation failure details
+          ansible.builtin.debug:
+            msg: >-
+              Reboot validation failed on {{ inventory_hostname }}.
+              Failed task={{ reboot_failed_task }}.
+              Error={{ reboot_failed_msg }}.
+              Missing mounts={{ missing_mounts_detail }}.
+
+    ###########################################################################
+    # Display host reboot status
+    ###########################################################################
+    - name: Display host reboot validation status
+      ansible.builtin.debug:
+        msg: >-
+          Host={{ inventory_hostname }},
+          Status={{ reboot_status | default('UNKNOWN') }},
+          OS_Major={{ os_major_version | default('unknown') }},
+          Reboot_Performed={{ reboot_performed | default('UNKNOWN') }},
+          Kernel_Before={{ kernel_before | default('unknown') }},
+          Kernel_After={{ kernel_after | default('unknown') }},
+          Uptime_After={{ uptime_after | default('unknown') }},
+          SSHD_Status={{ sshd_status_after | default('unknown') }},
+          Mount_Validation={{ mount_validation_status | default('unknown') }},
+          DF_Validation={{ df_validation_status | default('unknown') }},
+          Missing_Mounts={{ missing_mounts_detail | default('none') }},
+          Reboot_Dir={{ reboot_dir | default('not_created') }},
+          Reboot_Log={{ reboot_log | default('not_created') }}
+
+
+###############################################################################
+# Final Reporting Play
+###############################################################################
+
+- name: Final Linux Reboot Validation Report
+  hosts: localhost
+  gather_facts: false
+  become: false
+
+  vars:
+    mail_to: "wesco-linux@wescodist.com"
+    mail_from: "ansible-reboot@wescodist.com"
+
+  tasks:
+
+    - name: Initialize report variables
+      ansible.builtin.set_fact:
+        success_hosts: []
+        failed_hosts: []
+        report_lines: []
+
+    - name: Build success host list
+      ansible.builtin.set_fact:
+        success_hosts: "{{ success_hosts + [item] }}"
+      loop: "{{ groups['all'] }}"
+      when: hostvars[item].reboot_status | default('UNREACHABLE') == 'SUCCESS'
+
+    - name: Build failed or unreachable host list
+      ansible.builtin.set_fact:
+        failed_hosts: "{{ failed_hosts + [item] }}"
+      loop: "{{ groups['all'] }}"
+      when: hostvars[item].reboot_status | default('UNREACHABLE') != 'SUCCESS'
+
+    - name: Build final report lines for all hosts
+      ansible.builtin.set_fact:
+        report_lines: "{{ report_lines + [report_entry] }}"
+      vars:
+        report_entry: |
+          ------------------------------------------------------------
+          Host: {{ item }}
+          Status: {{ hostvars[item].reboot_status | default('UNREACHABLE_OR_GATHER_FACTS_FAILED') }}
+          OS Major Version: {{ hostvars[item].os_major_version | default('unknown') }}
+          Reboot Performed: {{ hostvars[item].reboot_performed | default('UNKNOWN') }}
+          Kernel Before: {{ hostvars[item].kernel_before | default('unknown') }}
+          Kernel After: {{ hostvars[item].kernel_after | default('unknown') }}
+          Uptime Before: {{ hostvars[item].uptime_before | default('unknown') }}
+          Uptime After: {{ hostvars[item].uptime_after | default('unknown') }}
+          SSHD Status After: {{ hostvars[item].sshd_status_after | default('unknown') }}
+          Mount Validation: {{ hostvars[item].mount_validation_status | default('unknown') }}
+          DF Validation: {{ hostvars[item].df_validation_status | default('unknown') }}
+          Missing Mounts: {{ hostvars[item].missing_mounts_detail | default('none') }}
+          Failed Task: {{ hostvars[item].reboot_failed_task | default('SSH/SUDO/GATHER_FACTS/REBOOT') }}
+          Failure Message: {{ hostvars[item].reboot_failed_msg | default('SSH connection failed, sudo failed, reboot failed, validation failed, or gather_facts failed') }}
+          Reboot Directory: {{ hostvars[item].reboot_dir | default('not_created') }}
+          Reboot Log: {{ hostvars[item].reboot_log | default('not_created') }}
+      loop: "{{ groups['all'] }}"
+
+    - name: Create final reboot validation report body
+      ansible.builtin.set_fact:
+        final_reboot_report: |
+          Linux Server Reboot and Validation Report
+
+          Summary:
+          ============================================================
+          Total Hosts              : {{ groups['all'] | length }}
+          Successful Hosts         : {{ success_hosts | length }}
+          Failed/Unreachable Hosts : {{ failed_hosts | length }}
+
+          Important:
+          ============================================================
+          This playbook performed reboot and post-reboot validation only.
+          It did not perform patching.
+
+          Supported OS Versions:
+          ============================================================
+          RHEL 6 - service-based sshd validation supported
+          RHEL 7 - systemctl/service validation supported
+          RHEL 8 - systemctl validation supported
+          RHEL 9 - systemctl validation supported
+
+          {% if failed_hosts | length == 0 %}
+          Overall Status:
+          ============================================================
+          SUCCESS
+
+          All servers completed reboot and post-reboot validation successfully.
+
+          Validation Completed:
+          ============================================================
+          - SSH communication successful
+          - Login successful as sysadmin
+          - sudo to root successful
+          - Supported OS version validated
+          - Reboot directory created successfully
+          - Reboot log file created successfully
+          - Kernel before reboot captured
+          - Uptime before reboot captured
+          - Filesystem usage before reboot captured
+          - Mount list before reboot captured
+          - Server rebooted successfully
+          - Server returned after reboot
+          - Facts gathered successfully after reboot
+          - Kernel after reboot captured
+          - Uptime after reboot captured
+          - Filesystem usage after reboot captured
+          - Mount list after reboot captured
+          - Missing mount validation completed
+          - sshd service validation completed
+
+          Successful Hosts:
+          ============================================================
+          {% for host in success_hosts %}
+          - {{ host }}
+          {% endfor %}
+
+          Detailed Host Report:
+          ============================================================
+          {% for line in report_lines %}
+          {{ line }}
+          {% endfor %}
+
+          {% else %}
+          Overall Status:
+          ============================================================
+          FAILED
+
+          One or more servers failed during reboot, post-reboot validation, or were unreachable.
+
+          Failed/Unreachable Hosts:
+          ============================================================
+          {% for host in failed_hosts %}
+          - {{ host }}
+          {% endfor %}
+
+          Detailed Host Report:
+          ============================================================
+          {% for line in report_lines %}
+          {{ line }}
+          {% endfor %}
+          {% endif %}
+
+          End of Report.
+
+    - name: Display final reboot validation report
+      ansible.builtin.debug:
+        msg: "{{ final_reboot_report }}"
+
+    - name: Set email subject
+      ansible.builtin.set_fact:
+        email_subject: >-
+          {% if failed_hosts | length == 0 %}
+          SUCCESS - Linux Server Reboot Validation Report
+          {% else %}
+          FAILED - Linux Server Reboot Validation Report
+          {% endif %}
+
+    - name: Save final reboot validation report to local temp file
+      ansible.builtin.copy:
+        dest: "/tmp/linux_reboot_validation_report.txt"
+        content: "{{ final_reboot_report }}"
+        mode: "0644"
+      delegate_to: localhost
+
+    ###########################################################################
+    # Send email using local Linux mail utilities
+    ###########################################################################
+    - name: Send final reboot validation email report using mailx/mail/sendmail
+      ansible.builtin.shell: |
+        set -o pipefail
+
+        REPORT_FILE="/tmp/linux_reboot_validation_report.txt"
+        MAIL_TO="{{ mail_to }}"
+        MAIL_FROM="{{ mail_from }}"
+        SUBJECT="{{ email_subject | trim }}"
+
+        if command -v mailx >/dev/null 2>&1; then
+          mailx -r "${MAIL_FROM}" -s "${SUBJECT}" "${MAIL_TO}" < "${REPORT_FILE}"
+        elif command -v mail >/dev/null 2>&1; then
+          mail -s "${SUBJECT}" "${MAIL_TO}" < "${REPORT_FILE}"
+        elif command -v sendmail >/dev/null 2>&1; then
+          {
+            echo "From: ${MAIL_FROM}"
+            echo "To: ${MAIL_TO}"
+            echo "Subject: ${SUBJECT}"
+            echo
+            cat "${REPORT_FILE}"
+          } | sendmail -t
+        else
+          echo "ERROR: No mailx, mail, or sendmail command found on Ansible control node."
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      register: email_send_result
+      changed_when: true
+      failed_when: false
+
+    - name: Display email send result
+      ansible.builtin.debug:
+        msg: >-
+          Email command return code={{ email_send_result.rc }}.
+          stdout={{ email_send_result.stdout | default('') }}.
+          stderr={{ email_send_result.stderr | default('') }}.

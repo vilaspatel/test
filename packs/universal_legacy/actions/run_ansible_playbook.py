@@ -4,6 +4,7 @@ Clone a Git repo, resolve an Ansible playbook + inventory path, and execute ansi
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -55,6 +56,16 @@ def _normalize_private_key_text(value: Optional[str]) -> Optional[str]:
     key = str(value).strip()
     if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
         key = key[1:-1]
+        key = key.strip()
+    # Accept base64-encoded keys (avoids YAML newline/indent/quote mangling).
+    # Store with: base64 -w0 key.pem
+    if not key.startswith("-----BEGIN"):
+        try:
+            decoded = base64.b64decode(key, validate=True).decode("utf-8")
+            if "-----BEGIN" in decoded:
+                key = decoded.strip()
+        except Exception:
+            pass
     if "\\n" in key and "\n" not in key:
         key = key.replace("\\n", "\n")
     key = key.replace("\r\n", "\n").replace("\r", "\n")

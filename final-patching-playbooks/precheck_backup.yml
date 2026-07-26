@@ -71,7 +71,7 @@
               msg={{ sudo_test.msg | default('N/A') }}
           when: >-
             (sudo_test.rc | default(1)) != 0 or
-            ('uid=0(root)' not in (sudo_test.stdout | default('')))
+            (sudo_test.stdout | default('') is not match('uid=0\('))
 
         #######################################################################
         # Create backup directory and log file safely
@@ -345,6 +345,7 @@
           Total Hosts              : {{ groups['all'] | length }}
           Successful Hosts         : {{ success_hosts | length }}
           Failed/Unreachable Hosts : {{ failed_hosts | length }}
+          Failed Host Names        : {{ failed_hosts | join(', ') if failed_hosts | length > 0 else 'None' }}
 
           Overall Status:
           ============================================================
@@ -377,6 +378,16 @@
           {% else %}
           {% for host in failed_hosts %}
           - {{ host }}
+          {% endfor %}
+          {% endif %}
+
+          Failure Details (host | category | task | message):
+          ============================================================
+          {% if failed_hosts | length == 0 %}
+          None
+          {% else %}
+          {% for host in failed_hosts %}
+          {{ host }} | {{ hostvars[host].precheck_failure_category | default('UNREACHABLE_OR_GATHER_FACTS_FAILED') }} | {{ hostvars[host].precheck_failed_task | default('SSH/SUDO/GATHER_FACTS') }} | {{ hostvars[host].precheck_failed_msg | default('SSH/sudo/gather_facts failed') | regex_replace('[\r\n]+', ' ') | truncate(180) }}
           {% endfor %}
           {% endif %}
 
