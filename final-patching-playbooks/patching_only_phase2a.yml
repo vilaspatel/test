@@ -26,7 +26,7 @@
     ansible_python_interpreter: auto_silent
     patch_root: "/var/log/ansible_patching"
 
-    mail_to: "vilas.j@wescodist.com"
+    mail_to: "wesco-linux@wescodist.com"
     mail_from: "ansible-patching@wescodist.com"
 
     ###########################################################################
@@ -696,7 +696,7 @@
   become: false
 
   vars:
-    mail_to: "vilas.j@wescodist.com"
+    mail_to: "wesco-linux@wescodist.com"
     mail_from: "ansible-patching@wescodist.com"
 
   tasks:

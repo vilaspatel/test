@@ -294,7 +294,7 @@
   become: false
 
   vars:
-    mail_to: "vilas.j@wescodist.com"
+    mail_to: "wesco-linux@wescodist.com"
     mail_from: "ansible-precheck@wescodist.com"
 
   tasks:

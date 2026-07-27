@@ -311,7 +311,7 @@
   gather_facts: false
 
   vars:
-    mail_to: "vilas.j@wescodist.com"
+    mail_to: "wesco-linux@wescodist.com"
     mail_from: "ansible-patching@wescodist.com"
 
   tasks:
