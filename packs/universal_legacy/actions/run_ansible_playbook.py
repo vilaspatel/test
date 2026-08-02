@@ -85,8 +85,6 @@ class RunAnsiblePlaybookAction(Action):
         inventory_path: str,
         ssh_username: Optional[str] = None,
         ssh_private_key: Optional[str] = None,
-        anixter_ssh_private_key: Optional[str] = None,
-        wesco_ssh_private_key: Optional[str] = None,
         ssh_port: Optional[int] = None,
         forks: Optional[int] = None,
         extra_vars: Optional[Any] = None,
@@ -135,31 +133,35 @@ class RunAnsiblePlaybookAction(Action):
             ]
 
             if resolved_ssh_username:
-                cmd.extend(["-u", resolved_ssh_username])
+                # extra-vars beat the play-level `remote_user:` keyword; -u does not
+                cmd.extend(["--extra-vars", json.dumps({"ansible_user": resolved_ssh_username})])
 
-            if resolved_ssh_private_key and str(resolved_ssh_private_key).strip():
+            # Per-domain keys come from pack config only (not per-execution input).
+            # Each is written to a temp file and exposed as an extra-var; the inventory
+            # picks one per host, e.g. in [rhel:vars]:
+            #   ansible_ssh_private_key_file={{ anixter_key if '.anixter.com' in (ansible_host | default(inventory_hostname)) | lower else wesco_key }}
+            domain_keys = {
+                "anixter": _normalize_private_key_text(cfg.get("anixter_ssh_private_key")),
+                "wesco": _normalize_private_key_text(cfg.get("wesco_ssh_private_key")),
+            }
+            for name, key_txt in domain_keys.items():
+                if not key_txt:
+                    continue
+                with tempfile.NamedTemporaryFile(mode="w", prefix=f"st2_{name}_key_", delete=False) as handle:
+                    handle.write(key_txt)
+                    path = handle.name
+                Path(path).chmod(0o600)
+                key_files.append(path)
+                cmd.extend(["--extra-vars", f"{name}_key={path}"])
+
+            # --private-key is global and would override the inventory's per-host
+            # choice, so it is only used when no domain key is configured.
+            if not key_files and resolved_ssh_private_key:
                 with tempfile.NamedTemporaryFile(mode="w", prefix="st2_ssh_key_", delete=False) as handle:
                     handle.write(resolved_ssh_private_key)
                     key_file = handle.name
                 Path(key_file).chmod(0o600)
                 cmd.extend(["--private-key", key_file])
-
-            # Per-domain keys from pack config -> temp files -> exposed as extra-vars.
-            # Inventory selects per host, e.g. in [rhel:vars]:
-            #   ansible_ssh_private_key_file={{ anixter_key if 'anixter.com' in ansible_host else wesco_key }}
-            domain_keys = {
-                "anixter": anixter_ssh_private_key or cfg.get("anixter_ssh_private_key"),
-                "wesco": wesco_ssh_private_key or cfg.get("wesco_ssh_private_key"),
-            }
-            for name, raw_key in domain_keys.items():
-                key_txt = _normalize_private_key_text(raw_key)
-                if key_txt:
-                    with tempfile.NamedTemporaryFile(mode="w", prefix=f"st2_{name}_key_", delete=False) as handle:
-                        handle.write(key_txt)
-                        path = handle.name
-                    Path(path).chmod(0o600)
-                    key_files.append(path)
-                    cmd.extend(["--extra-vars", f"{name}_key={path}"])
 
             if ssh_port is not None:
                 cmd.extend(["--extra-vars", f"ansible_port={int(ssh_port)}"])
@@ -209,6 +211,7 @@ class RunAnsiblePlaybookAction(Action):
                 "playbook_path": playbook_path,
                 "inventory_path": inventory_path,
                 "forks": forks_int,
+                "ssh_key_mode": "per-domain" if key_files else ("single" if key_file else "none"),
             }
         except subprocess.TimeoutExpired:
             return False, {

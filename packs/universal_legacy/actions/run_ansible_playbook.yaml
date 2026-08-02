@@ -29,21 +29,10 @@ parameters:
     required: false
   ssh_private_key:
     type: string
-    description: Optional PEM private key content; saved to temp file for --private-key.
-    required: false
-    secret: true
-  anixter_ssh_private_key:
-    type: string
     description: >
-      Optional PEM key for anixter.com hosts. Overrides pack config. Exposed to the
-      playbook as the `anixter_key` var for per-host key selection.
-    required: false
-    secret: true
-  wesco_ssh_private_key:
-    type: string
-    description: >
-      Optional PEM key for wescodist.com hosts. Overrides pack config. Exposed to the
-      playbook as the `wesco_key` var for per-host key selection.
+      Optional PEM private key content; saved to temp file for --private-key.
+      Ignored when the pack config sets anixter_ssh_private_key / wesco_ssh_private_key,
+      since --private-key would override the inventory's per-host key selection.
     required: false
     secret: true
   ssh_port:
@@ -109,4 +98,5 @@ output_schema:
     playbook_path: { type: string }
     inventory_path: { type: string }
     forks: { type: integer }
+    ssh_key_mode: { type: string }
     error: { type: string }
